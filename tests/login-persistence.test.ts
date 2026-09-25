@@ -18,14 +18,14 @@ describe("การเข้าสู่ระบบบนเครื่อง 
       assert.deepEqual(initial.users.find((user) => user.username === "tableadmin")?.roles, ["tables", "merch"]);
       assert.equal(store.verifyPassword("Demo@1234", customer.passwordHash), true);
       await store.mutateData((data) => {
-        data.sessions.push({ token: "test-session", userId: customer.id, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+        data.sessions.push({ token: "test-session", userId: customer.id, expiresAt: new Date(Date.now() + 60_000).toISOString(), lastActiveAt: new Date().toISOString() });
       });
       const after = await store.readData();
       assert.equal(store.currentUser(after, "test-session")?.username, "customer");
     } finally {
       process.chdir(originalCwd);
       if (!temp.startsWith(os.tmpdir() + path.sep)) throw new Error("Unsafe temp path");
-      await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
   });
 });

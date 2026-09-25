@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { activeOrder, hashPassword, snapshot, verifyPassword } from "../lib/demo-store";
+import { activeOrder, currentUser, hashPassword, snapshot, verifyPassword } from "../lib/demo-store";
+import ExcelJS from "exceljs";
+import { exportCustomerXlsx } from "../lib/export-xlsx";
+import { defaultSettings } from "../lib/site-settings";
 import type { DemoData, DemoOrder, DemoUser } from "../lib/demo-types";
 
 const now = new Date().toISOString();
@@ -67,4 +70,29 @@ describe("บัญชีและสิทธิ์", () => {
     assert.deepEqual(view.orders.map((order) => order.id), ["T-1", "P-1"]);
     assert.equal(view.customers.length, 1);
   });
+});
+
+it("เวลาและ session: ตีกลับสลิปหมดอายุแล้วคืนสิทธิ์ และ idle ตัดการเข้าถึง", () => {
+  const order = baseOrder({ status: "needs_revision", holdUntil: new Date(Date.now() - 1000).toISOString() });
+  assert.equal(activeOrder(order), false);
+  const data = baseData([order]);
+  data.settings = { ...defaultSettings, idleSeconds: 300 };
+  data.sessions = [{ token: "idle", userId: "customer", expiresAt: new Date(Date.now() + 3600_000).toISOString(), lastActiveAt: new Date(Date.now() - 301_000).toISOString() }];
+  assert.equal(currentUser(data, "idle"), null);
+  data.sessions[0].lastActiveAt = new Date().toISOString();
+  assert.equal(currentUser(data, "idle")?.id, "customer");
+});
+
+it("Excel เปิดกลับได้ มีตัวกรอง คอลัมน์กว้าง และตัดบรรทัดรายละเอียด", async () => {
+  const data = baseData([baseOrder({ dietaryNotes: "แพ้อาหารทะเล ต้องแยกอาหารอย่างชัดเจน" })]);
+  const bytes = await exportCustomerXlsx(data);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(Buffer.from(bytes) as never);
+  const sheet = workbook.getWorksheet("สถานะลูกค้า");
+  assert.ok(sheet);
+  assert.ok(sheet.getRow(2).getCell(1).value);
+  assert.equal(sheet.getColumn(1).width, 39);
+  assert.equal(sheet.getRow(2).getCell(1).alignment?.wrapText, true);
+  assert.deepEqual(sheet.views[0].state, "frozen");
+  assert.ok(sheet.autoFilter);
 });

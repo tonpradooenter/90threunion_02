@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronRight, Clock3, Download, Search, ShoppingBag, Ticket, UserRound, X } from "lucide-react";
@@ -64,7 +64,7 @@ export default function AdminActivity({ snapshot, onManage }: { snapshot: DemoSn
 
   return <>
     <section className="admin-panel activity-panel customer-overview">
-      <div className="panel-head"><div><span className="eyebrow">CUSTOMER OVERVIEW</span><h2>{selectedCustomer ? `รายการของ ${selectedCustomer.displayName}` : "ค้นหาและเลือกบัญชีลูกค้า"}</h2></div><a className="activity-all" href={selectedCustomer ? `/api/export?customerId=${encodeURIComponent(selectedCustomer.id)}` : "/api/export"}><Download size={16} /> CSV</a></div>
+      <div className="panel-head"><div><span className="eyebrow">CUSTOMER OVERVIEW</span><h2>{selectedCustomer ? `รายการของ ${selectedCustomer.displayName}` : "ค้นหาและเลือกบัญชีลูกค้า"}</h2></div><a className="activity-all" href={selectedCustomer ? `/api/export?customerId=${encodeURIComponent(selectedCustomer.id)}` : "/api/export"}><Download size={16} /> Excel</a></div>
       {selectedCustomer ? <>
         <button className="activity-back" type="button" onClick={() => setSelectedCustomer(null)}><ArrowLeft size={16} /> กลับไปค้นหาลูกค้า</button>
         <div className="customer-overview-selected"><span className="customer-overview-avatar"><UserRound size={22} /></span><div><strong>{selectedCustomer.displayName}</strong><small>ID {selectedCustomer.id} · @{selectedCustomer.username}{selectedCustomer.phone ? ` · ${selectedCustomer.phone}` : ""}</small></div></div>

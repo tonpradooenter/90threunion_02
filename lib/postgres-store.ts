@@ -28,8 +28,10 @@ export async function ensurePostgresSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS sisat_orders_type_date ON sisat_orders (type, created_at DESC);
     CREATE TABLE IF NOT EXISTS sisat_sessions (
       token text PRIMARY KEY, user_id text NOT NULL REFERENCES sisat_users(id) ON DELETE CASCADE,
-      expires_at timestamptz NOT NULL
+      expires_at timestamptz NOT NULL, last_active_at timestamptz
     );
+    ALTER TABLE sisat_sessions ADD COLUMN IF NOT EXISTS last_active_at timestamptz;
+    UPDATE sisat_sessions SET last_active_at = expires_at - interval '12 hours' WHERE last_active_at IS NULL;
     CREATE INDEX IF NOT EXISTS sisat_sessions_expiry ON sisat_sessions (expires_at);
     CREATE TABLE IF NOT EXISTS sisat_blocked_tables (id text PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS sisat_audit (id bigserial PRIMARY KEY, data jsonb NOT NULL);
@@ -42,7 +44,7 @@ async function readFrom(client: PoolClient): Promise<DemoData> {
   const products = await client.query("SELECT data FROM sisat_products ORDER BY position, id");
   const zones = await client.query("SELECT data FROM sisat_zones ORDER BY position, id");
   const orders = await client.query("SELECT data FROM sisat_orders ORDER BY position, id");
-  const sessions = await client.query("SELECT token, user_id, expires_at FROM sisat_sessions");
+  const sessions = await client.query("SELECT token, user_id, expires_at, last_active_at FROM sisat_sessions");
   const blocked = await client.query("SELECT id FROM sisat_blocked_tables ORDER BY id");
   const audit = await client.query("SELECT data FROM sisat_audit ORDER BY id");
   const settings = await client.query("SELECT key, value FROM sisat_settings");
@@ -52,11 +54,13 @@ async function readFrom(client: PoolClient): Promise<DemoData> {
     products: products.rows.map((entry) => entry.data as Product),
     zones: zones.rows.map((entry) => entry.data as Zone),
     orders: orders.rows.map((entry) => entry.data as DemoOrder),
-    sessions: sessions.rows.map((entry) => ({ token: entry.token as string, userId: entry.user_id as string, expiresAt: new Date(entry.expires_at).toISOString() })),
+    sessions: sessions.rows.map((entry) => ({ token: entry.token as string, userId: entry.user_id as string, expiresAt: new Date(entry.expires_at).toISOString(), lastActiveAt: entry.last_active_at ? new Date(entry.last_active_at).toISOString() : undefined })),
     blockedTables: blocked.rows.map((entry) => entry.id as string),
     audit: audit.rows.map((entry) => entry.data as AuditEntry),
     schemaVersion: Number(value.get("schemaVersion") ?? 0),
     categories: Array.isArray(value.get("categories")) ? value.get("categories") as string[] : undefined,
+    settings: value.get("eventSettings") as DemoData["settings"],
+    brandingHistory: value.get("brandingHistory") as DemoData["brandingHistory"],
   };
 }
 
@@ -110,10 +114,14 @@ async function persist(client: PoolClient, before: DemoData, after: DemoData): P
   for (const id of oldProducts.keys()) if (!after.products.some((product) => product.id === id)) await client.query("DELETE FROM sisat_products WHERE id=$1", [id]);
   for (const id of oldUsers.keys()) if (!after.users.some((user) => user.id === id)) await client.query("DELETE FROM sisat_users WHERE id=$1", [id]);
   for (const id of oldZones.keys()) if (!after.zones.some((zone) => zone.id === id)) await client.query("DELETE FROM sisat_zones WHERE id=$1", [id]);
-  if (changed(before.sessions, after.sessions)) {
-    await client.query("DELETE FROM sisat_sessions");
-    for (const session of after.sessions) await client.query("INSERT INTO sisat_sessions(token,user_id,expires_at) VALUES($1,$2,$3)", [session.token, session.userId, session.expiresAt]);
+  const oldSessions = new Map(before.sessions.map((entry) => [entry.token, entry]));
+  for (const session of after.sessions) {
+    if (!changed(oldSessions.get(session.token), session)) continue;
+    await client.query(`INSERT INTO sisat_sessions(token,user_id,expires_at,last_active_at) VALUES($1,$2,$3,$4)
+      ON CONFLICT(token) DO UPDATE SET user_id=EXCLUDED.user_id,expires_at=EXCLUDED.expires_at,last_active_at=EXCLUDED.last_active_at`,
+      [session.token, session.userId, session.expiresAt, session.lastActiveAt ?? session.expiresAt]);
   }
+  for (const token of oldSessions.keys()) if (!after.sessions.some((entry) => entry.token === token)) await client.query("DELETE FROM sisat_sessions WHERE token=$1", [token]);
   if (changed(before.blockedTables, after.blockedTables)) {
     await client.query("DELETE FROM sisat_blocked_tables");
     for (const id of after.blockedTables) await client.query("INSERT INTO sisat_blocked_tables(id) VALUES($1)", [id]);
@@ -122,9 +130,11 @@ async function persist(client: PoolClient, before: DemoData, after: DemoData): P
     await client.query("DELETE FROM sisat_audit");
     for (const entry of after.audit) await client.query("INSERT INTO sisat_audit(data) VALUES($1::jsonb)", [JSON.stringify(entry)]);
   }
-  if (before.schemaVersion !== after.schemaVersion || changed(before.categories, after.categories)) {
+  if (before.schemaVersion !== after.schemaVersion || changed(before.categories, after.categories) || changed(before.settings, after.settings) || changed(before.brandingHistory, after.brandingHistory)) {
     await client.query("INSERT INTO sisat_settings(key,value) VALUES('schemaVersion',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(after.schemaVersion ?? 0)]);
     await client.query("INSERT INTO sisat_settings(key,value) VALUES('categories',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(after.categories ?? [])]);
+    await client.query("INSERT INTO sisat_settings(key,value) VALUES('eventSettings',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(after.settings ?? {})]);
+    await client.query("INSERT INTO sisat_settings(key,value) VALUES('brandingHistory',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(after.brandingHistory ?? [])]);
   }
 }
 
@@ -169,4 +179,17 @@ export async function searchPostgresCustomers(query: string, limit = 50, offset 
       AND ($1='' OR u.display_name ILIKE $2 ESCAPE '\\' OR u.username ILIKE $2 ESCAPE '\\' OR coalesce(u.phone,'') ILIKE $2 ESCAPE '\\' OR u.id ILIKE $2 ESCAPE '\\')
     GROUP BY u.id ORDER BY u.display_name, u.id LIMIT $3 OFFSET $4`, [query.trim(), term, Math.min(limit, 100), Math.max(0, offset)]);
   return result.rows.map((row) => ({ id: row.id, displayName: row.display_name, username: row.username, phone: row.phone ?? undefined, orderCount: row.order_count }));
+}
+
+export async function touchPostgresSession(token: string): Promise<boolean> {
+  const result = await database().query(`
+    UPDATE sisat_sessions s SET last_active_at=now()
+    FROM sisat_users u
+    WHERE s.token=$1 AND u.id=s.user_id AND u.data->>'active'='true'
+      AND s.expires_at > now()
+      AND s.last_active_at > now() - (
+        coalesce((SELECT (value->>'idleSeconds')::integer FROM sisat_settings WHERE key='eventSettings'),300) * interval '1 second'
+      )
+    RETURNING s.token`, [token]);
+  return result.rowCount === 1;
 }

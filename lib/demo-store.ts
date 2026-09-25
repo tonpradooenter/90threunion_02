@@ -2,7 +2,8 @@ import { randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { DemoData, DemoOrder, DemoSnapshot, DemoUser, PublicUser, Role } from "./demo-types";
-import { mutatePostgresData, readPostgresData } from "./postgres-store";
+import { mutatePostgresData, readPostgresData, touchPostgresSession } from "./postgres-store";
+import { defaultSettings, settingsOf } from "./site-settings";
 
 const dataDir = path.join(process.cwd(), "data");
 const dataFile = path.join(dataDir, "demo.json");
@@ -42,6 +43,7 @@ function seedData(): DemoData {
   });
   const seeded: DemoData = {
     schemaVersion: 2,
+    settings: structuredClone(defaultSettings),
     users: [
       user("superadmin", "ผู้ดูแลระบบ", "superadmin"),
       user("tableadmin", "ฝ่ายโต๊ะจีน", "tables", ["tables", "merch"]),
@@ -146,6 +148,18 @@ export function migrateData(data: DemoData): DemoData {
     data.categories = [...new Set([...defaults, ...data.products.map((product) => product.category)])];
     data.schemaVersion = 3;
   }
+  if ((data.schemaVersion ?? 0) < 4) {
+    for (const order of data.orders) {
+      if (order.slipFile && !order.slips?.length) order.slips = [{ id: order.slipFile, filename: order.slipFile, name: order.slipName ?? "slip", uploadedAt: order.createdAt }];
+      if (order.status === "needs_revision") order.holdUntil = new Date(Date.parse(order.reviewedAt ?? order.createdAt) + defaultSettings.revisionHoldMinutes * 60_000).toISOString();
+    }
+    for (const session of data.sessions) session.lastActiveAt ??= new Date(Date.parse(session.expiresAt) - 12 * 60 * 60_000).toISOString();
+    data.settings = settingsOf(data);
+    data.brandingHistory ??= [];
+    data.schemaVersion = 4;
+  }
+  data.settings = settingsOf(data);
+  data.brandingHistory ??= [];
   data.categories ??= ["\u0e40\u0e2a\u0e37\u0e49\u0e2d", "\u0e41\u0e01\u0e49\u0e27\u0e19\u0e49\u0e33", "\u0e1c\u0e49\u0e32\u0e1e\u0e31\u0e19\u0e04\u0e2d"];
   for (const order of data.orders) {
     if (order.type === "table" && !order.tablePrices) {
@@ -188,12 +202,15 @@ export async function mutateData<T>(fn: (data: DemoData) => Promise<T> | T): Pro
 export function currentUser(data: DemoData, token: string | undefined): DemoUser | null {
   if (!token) return null;
   const session = data.sessions.find((entry) => entry.token === token && Date.parse(entry.expiresAt) > Date.now());
-  return session ? data.users.find((user) => user.id === session.userId && user.active) ?? null : null;
+  if (!session) return null;
+  const lastActive = Date.parse(session.lastActiveAt ?? "") || Date.parse(session.expiresAt) - 12 * 60 * 60_000;
+  if (Date.now() - lastActive > settingsOf(data).idleSeconds * 1000) return null;
+  return data.users.find((user) => user.id === session.userId && user.active) ?? null;
 }
 
 export function activeOrder(order: DemoOrder): boolean {
-  if (order.status === "approved" || order.status === "under_review" || order.status === "needs_revision" || order.status === "cancellation_review" || order.status === "refund_pending") return true;
-  if (order.status === "assisted_draft") return Date.parse(order.holdUntil) > Date.now();
+  if (order.status === "approved" || order.status === "under_review" || order.status === "cancellation_review" || order.status === "refund_pending") return true;
+  if (order.status === "assisted_draft" || order.status === "needs_revision") return Date.parse(order.holdUntil) > Date.now();
   return order.status === "awaiting_slip" && Date.parse(order.holdUntil) > Date.now();
 }
 
@@ -220,6 +237,7 @@ export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
       return {
         ...displayOrder,
         slipFile: hasRole(me, "finance") ? order.slipFile : undefined,
+        slips: hasRole(me, "finance") ? order.slips : undefined,
         slipName: hasRole(me, "finance") ? order.slipName : undefined,
         dietaryNotes: hasRole(me, "tables") ? order.dietaryNotes : "",
         ticketCodes: [],
@@ -240,6 +258,8 @@ export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
       ? data.users.filter((user) => hasRole(user, "customer")).map(({ id, displayName, username, phone }) => ({ id, displayName, username, ...(phone ? { phone } : {}) }))
       : [],
     categories: data.categories ?? ["\u0e40\u0e2a\u0e37\u0e49\u0e2d", "\u0e41\u0e01\u0e49\u0e27\u0e19\u0e49\u0e33", "\u0e1c\u0e49\u0e32\u0e1e\u0e31\u0e19\u0e04\u0e2d"],
+    settings: settingsOf(data),
+    brandingHistory: me && hasRole(me, "superadmin") ? data.brandingHistory ?? [] : [],
     audit: me && hasRole(me, "superadmin") ? data.audit.slice(-30).reverse() : [],
   };
 }
@@ -247,4 +267,17 @@ export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
 export function logAction(data: DemoData, actorId: string, action: string, detail: string): void {
   data.audit.push({ at: new Date().toISOString(), actorId, action, detail });
   if (data.audit.length > 500) data.audit.splice(0, data.audit.length - 500);
+}
+
+export async function touchSession(token: string | undefined): Promise<boolean> {
+  if (!token) return false;
+  if (process.env.DATABASE_URL) return touchPostgresSession(token);
+  return mutateData((data) => {
+    const user = currentUser(data, token);
+    if (!user) return false;
+    const session = data.sessions.find((entry) => entry.token === token);
+    if (!session) return false;
+    session.lastActiveAt = new Date().toISOString();
+    return true;
+  });
 }

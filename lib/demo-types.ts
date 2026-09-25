@@ -2,6 +2,24 @@ export type Role = "superadmin" | "tables" | "merch" | "finance" | "gate" | "cus
 export type OrderStatus = "awaiting_slip" | "assisted_draft" | "under_review" | "needs_revision" | "approved" | "cancellation_review" | "refund_pending" | "refunded" | "cancelled";
 export type OrderType = "table" | "product";
 
+export interface SiteBranding {
+  eventLogo: string; ovcLogo: string; heroDesktop: string; heroMobile: string;
+  introImage: string; tableBanner: string; shopBanner: string; closingImage: string;
+  primaryColor: string; accentColor: string; brandName: string; brandSubtitle: string;
+  kicker: string; heroTitle: string; heroAccent: string; heroLead: string; heroLeadSecond: string;
+  venueText: string; dateText: string; welcomeText: string; introTitle: string; introAccent: string;
+  introBody: string; tableTitle: string; tableDescription: string; shopTitle: string;
+  shopDescription: string; stepsTitle: string; stepsAccent: string; closingTitle: string;
+  closingAccent: string; ctaTables: string; ctaShop: string;
+}
+export interface EventSettings {
+  tableHoldMinutes: number; productHoldMinutes: number;
+  assistedTableHoldMinutes: number; assistedProductHoldMinutes: number;
+  revisionHoldMinutes: number; idleSeconds: number; branding: SiteBranding;
+}
+export interface SlipImage {
+  id: string; filename: string; name: string; uploadedAt: string;
+}
 export interface DemoUser {
   id: string;
   username: string;
@@ -84,6 +102,7 @@ export interface DemoOrder {
   tablePrices?: Record<string, number>;
   createdAt: string;
   holdUntil: string;
+  slips?: SlipImage[];
   slipFile?: string;
   slipName?: string;
   financeComment?: string;
@@ -109,13 +128,15 @@ export interface AuditEntry {
 export interface DemoData {
   schemaVersion?: number;
   users: DemoUser[];
-  sessions: { token: string; userId: string; expiresAt: string }[];
+  sessions: { token: string; userId: string; expiresAt: string; lastActiveAt?: string }[];
   products: Product[];
   zones: Zone[];
   orders: DemoOrder[];
   blockedTables: string[];
   audit: AuditEntry[];
   categories?: string[];
+  settings?: EventSettings;
+  brandingHistory?: { at: string; actorId: string; branding: SiteBranding }[];
 }
 
 export interface DemoSnapshot {
@@ -129,5 +150,7 @@ export interface DemoSnapshot {
   customers: PublicUser[];
   orderCustomers: { id: string; displayName: string; username: string; phone?: string }[];
   categories: string[];
+  settings: EventSettings;
+  brandingHistory: { at: string; actorId: string; branding: SiteBranding }[];
   audit: AuditEntry[];
 }

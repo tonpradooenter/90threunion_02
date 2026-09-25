@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { activeOrder, currentUser, hasRole, hashPassword, logAction, mutateData, publicUser, readData, snapshot, verifyPassword } from "@/lib/demo-store";
 import { sameOrigin } from "@/lib/request-origin";
 import { cancelEntireOrder, completeRefund, orderIsUsed, recordRemovedSelections, resolveCancellation } from "@/lib/order-workflow";
+import { defaultBranding, settingsOf, validSiteImage } from "@/lib/site-settings";
 import type { DemoData, DemoOrder, DemoUser, OrderItem, OrderRefund, Role } from "@/lib/demo-types";
 
 export const runtime = "nodejs";
@@ -118,7 +119,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       const user = await mutateData((data) => {
         const found = data.users.find((entry) => entry.username === username && entry.active);
         if (!found || !verifyPassword(password, found.passwordHash)) throw new AppError("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", 401);
-        data.sessions.push({ token: sessionToken, userId: found.id, expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() });
+        data.sessions.push({ token: sessionToken, userId: found.id, expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(), lastActiveAt: new Date().toISOString() });
         return publicUser(found);
       });
       const response = NextResponse.json({ ok: true, user });
@@ -140,7 +141,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         if (phone && data.users.some((entry) => entry.phone === phone)) throw new AppError("เบอร์โทรนี้มีบัญชีแล้ว");
         const created: DemoUser = { id: randomUUID(), username, displayName, passwordHash: hashPassword(password), role: "customer", roles: ["customer"], phone: phone || undefined, contactSource: "web", active: true, createdAt: new Date().toISOString() };
         data.users.push(created);
-        data.sessions.push({ token: sessionToken, userId: created.id, expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() });
+        data.sessions.push({ token: sessionToken, userId: created.id, expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(), lastActiveAt: new Date().toISOString() });
         logAction(data, created.id, "register", username);
         return publicUser(created);
       });
@@ -159,6 +160,57 @@ export async function POST(request: Request): Promise<NextResponse> {
     const result = await mutateData((data) => {
       const me = requireUser(data, token);
 
+      if (action === "saveOperationalSettings") {
+        requireRole(me, ["superadmin"]);
+        const current = settingsOf(data);
+        const idleSeconds = int(body.idleSeconds, 30, 3600);
+        data.settings = {
+          ...current,
+          tableHoldMinutes: int(body.tableHoldMinutes, 1, 43200),
+          productHoldMinutes: int(body.productHoldMinutes, 1, 43200),
+          assistedTableHoldMinutes: int(body.assistedTableHoldMinutes, 1, 43200),
+          assistedProductHoldMinutes: int(body.assistedProductHoldMinutes, 1, 43200),
+          revisionHoldMinutes: int(body.revisionHoldMinutes, 1, 43200),
+          idleSeconds,
+        };
+        logAction(data, me.id, "save_operational_settings", JSON.stringify({
+          table: data.settings.tableHoldMinutes, product: data.settings.productHoldMinutes,
+          assistedTable: data.settings.assistedTableHoldMinutes, assistedProduct: data.settings.assistedProductHoldMinutes,
+          revision: data.settings.revisionHoldMinutes, idleSeconds,
+        }));
+        return { settings: data.settings };
+      }
+      if (action === "publishBranding" || action === "restoreBranding") {
+        requireRole(me, ["superadmin"]);
+        const current = settingsOf(data);
+        let branding = current.branding;
+        if (action === "publishBranding") {
+          const raw = body.branding;
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new AppError("ข้อมูลหน้าเว็บไม่ถูกต้อง");
+          const input = raw as Record<string, unknown>;
+          const next = { ...defaultBranding };
+          for (const key of Object.keys(defaultBranding) as (keyof typeof defaultBranding)[]) {
+            const value = input[key];
+            if (typeof value !== "string" || value.length > 500) throw new AppError(`ช่อง ${key} ไม่ถูกต้อง`);
+            if (key.endsWith("Color")) {
+              if (!/^#[0-9a-fA-F]{6}$/.test(value)) throw new AppError("รหัสสีต้องเป็น HEX 6 หลัก");
+            } else if (["eventLogo", "ovcLogo", "heroDesktop", "heroMobile", "introImage", "tableBanner", "shopBanner", "closingImage"].includes(key)) {
+              if (!validSiteImage(value) || (key !== "closingImage" && !value)) throw new AppError("ตำแหน่งภาพไม่ถูกต้อง");
+            } else if (!value.trim()) throw new AppError("กรุณากรอกข้อความให้ครบ");
+            next[key] = value.trim();
+          }
+          branding = next;
+        } else {
+          const index = int(body.revisionIndex, 0, 9);
+          const revision = data.brandingHistory?.[index];
+          if (!revision) throw new AppError("ไม่พบฉบับที่ต้องการย้อนกลับ");
+          branding = revision.branding;
+        }
+        data.brandingHistory = [{ at: new Date().toISOString(), actorId: me.id, branding: current.branding }, ...(data.brandingHistory ?? [])].slice(0, 10);
+        data.settings = { ...current, branding };
+        logAction(data, me.id, action === "publishBranding" ? "publish_branding" : "restore_branding", "หน้า Home");
+        return { branding };
+      }
       if (action === "createOrder") {
         requireRole(me, ["customer", "superadmin"]);
         const type = body.type === "table" ? "table" : body.type === "product" ? "product" : null;
@@ -170,7 +222,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           userId: me.id, type, status: "awaiting_slip", tableIds, items, tablePrices,
           meal: type === "table" ? str(body.meal, 100) || "ชุดอาหารมาตรฐาน" : "",
           dietaryNotes: type === "table" ? str(body.dietaryNotes, 500) : "",
-          amount, createdAt: now.toISOString(), holdUntil: new Date(now.getTime() + 20 * 60 * 1000).toISOString(),
+          amount, createdAt: now.toISOString(), holdUntil: new Date(now.getTime() + (type === "table" ? settingsOf(data).tableHoldMinutes : settingsOf(data).productHoldMinutes) * 60_000).toISOString(),
           ticketCodes: [], checkedInCodes: [],
         };
         data.orders.unshift(order);
@@ -250,7 +302,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         order.meal = type === "table" ? str(body.meal, 100) || "ชุดอาหารมาตรฐาน" : "";
         order.dietaryNotes = type === "table" ? str(body.dietaryNotes, 500) : "";
         order.status = "assisted_draft";
-        order.holdUntil = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        order.holdUntil = new Date(now.getTime() + (type === "table" ? settingsOf(data).assistedTableHoldMinutes : settingsOf(data).assistedProductHoldMinutes) * 60_000).toISOString();
         order.channel = channel as DemoOrder["channel"];
         order.assistedBy = me.id;
         order.slipFile = undefined;
@@ -320,6 +372,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         if (decision === "revise" && comment.length < 4) throw new AppError("กรุณาระบุเหตุผลให้ลูกค้าทราบ");
         order.status = decision === "approve" ? "approved" : "needs_revision";
         order.financeComment = comment;
+        if (decision === "revise") order.holdUntil = new Date(Date.now() + settingsOf(data).revisionHoldMinutes * 60_000).toISOString();
         order.reviewedBy = me.id;
         order.reviewedAt = new Date().toISOString();
         if (decision === "approve") {

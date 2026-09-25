@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState } from "react";
 import { Check, CreditCard, Download, Search, WalletCards } from "lucide-react";
@@ -10,8 +10,12 @@ const dateText = (date: string) => new Intl.DateTimeFormat("th-TH", { dateStyle:
 
 function Slip({ order }: { order: DemoOrder }) {
   const [open, setOpen] = useState(false);
-  if (!order.slipFile) return <span className="muted">ไม่มีภาพสลิป</span>;
-  return <div className="finance-slip"><button type="button" className="slip-link" onClick={() => setOpen((value) => !value)}><Search size={16} /> {open ? "ซ่อนสลิป" : "ดูสลิป"}</button>{open && <div className="slip-preview"><img src={`/api/slip?orderId=${encodeURIComponent(order.id)}`} alt={`สลิปของ ${order.id}`} /><a href={`/api/slip?orderId=${encodeURIComponent(order.id)}`} target="_blank" rel="noreferrer"><Download size={15} /> เปิดภาพเต็ม</a></div>}</div>;
+  const images = order.slips?.length ? order.slips : order.slipFile ? [{ id: order.slipFile, name: order.slipName ?? "slip" }] : [];
+  if (!images.length) return <span className="muted">ไม่มีภาพสลิป</span>;
+  return <div className="finance-slip"><button type="button" className="slip-link" onClick={() => setOpen((value) => !value)}><Search size={16} /> {open ? "ซ่อนสลิป" : `ดูสลิป ${images.length} รูป`}</button>{open && <div className="slip-gallery">{images.map((slip, index) => {
+    const url = `/api/slip?orderId=${encodeURIComponent(order.id)}&slipId=${encodeURIComponent(slip.id)}`;
+    return <div className="slip-preview" key={slip.id}><img src={url} alt={`สลิป ${index + 1} ของ ${order.id}`} /><a href={url} target="_blank" rel="noreferrer"><Download size={15} /> เปิดภาพ {index + 1} เต็ม</a></div>;
+  })}</div>}</div>;
 }
 function RefundTask({ order, refund, act, working }: { order: DemoOrder; refund: OrderRefund; act: Action; working: boolean }) {
   const [reference, setReference] = useState("");
