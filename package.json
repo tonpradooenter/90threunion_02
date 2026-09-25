@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "db:setup": "node --env-file=.env.local --import tsx scripts/db-setup.ts",
+    "db:check": "node --env-file=.env.local --import tsx scripts/db-check.ts",
+    "db:backfill": "node --env-file=.env.local --import tsx scripts/db-backfill.ts",
+    "db:smoke": "node --env-file=.env.local --import tsx scripts/db-smoke.ts"
   },
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.2.8",
@@ -15,12 +19,14 @@
     "jsqr": "^1.4.0",
     "lucide-react": "^0.468.0",
     "next": "^16.0.0",
+    "pg": "^8.23.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "tsx": "^4.20.0",

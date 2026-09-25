@@ -2,6 +2,7 @@ import { randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { DemoData, DemoOrder, DemoSnapshot, DemoUser, PublicUser, Role } from "./demo-types";
+import { mutatePostgresData, readPostgresData } from "./postgres-store";
 
 const dataDir = path.join(process.cwd(), "data");
 const dataFile = path.join(dataDir, "demo.json");
@@ -112,7 +113,7 @@ function addSampleOrders(data: DemoData): void {
   }
 }
 
-function migrateData(data: DemoData): DemoData {
+export function migrateData(data: DemoData): DemoData {
   for (const product of data.products) {
     if (product.image === "/assets/polo.png") product.image = "/assets/shirt-reference.png";
     if (product.image === "/assets/gift-set.png") product.image = "/assets/souvenir-unbranded.png";
@@ -125,6 +126,33 @@ function migrateData(data: DemoData): DemoData {
     addSampleOrders(data);
     data.schemaVersion = 2;
   }
+  if ((data.schemaVersion ?? 0) < 3) {
+    const defaults = ["\u0e40\u0e2a\u0e37\u0e49\u0e2d", "\u0e41\u0e01\u0e49\u0e27\u0e19\u0e49\u0e33", "\u0e1c\u0e49\u0e32\u0e1e\u0e31\u0e19\u0e04\u0e2d"];
+    for (const product of data.products) {
+      if (product.id === "polo") product.category = "\u0e40\u0e2a\u0e37\u0e49\u0e2d";
+      product.options ??= product.sizes.map((label, index) => ({ id: `${product.id}-option-${index + 1}`, label }));
+    }
+    for (const order of data.orders) {
+      order.cancelledItems ??= [];
+      order.cancelledTables ??= [];
+      order.cancelledTicketCodes ??= [];
+      order.refunds ??= [];
+      order.items.forEach((item, index) => {
+        item.id ??= `${order.id}-item-${index + 1}`;
+        const product = data.products.find((entry) => entry.id === item.productId);
+        item.optionId ??= product?.options?.find((option) => option.label === item.size)?.id;
+      });
+    }
+    data.categories = [...new Set([...defaults, ...data.products.map((product) => product.category)])];
+    data.schemaVersion = 3;
+  }
+  data.categories ??= ["\u0e40\u0e2a\u0e37\u0e49\u0e2d", "\u0e41\u0e01\u0e49\u0e27\u0e19\u0e49\u0e33", "\u0e1c\u0e49\u0e32\u0e1e\u0e31\u0e19\u0e04\u0e2d"];
+  for (const order of data.orders) {
+    if (order.type === "table" && !order.tablePrices) {
+      order.tablePrices = Object.fromEntries(order.tableIds.map((id) => [id, data.zones.find((zone) => zone.id === id[0])?.price ?? Math.round(order.amount / Math.max(1, order.tableIds.length))]));
+    }
+    if (["approved", "refund_pending", "refunded"].includes(order.status)) order.paidAmount ??= order.amount;
+  }
   return data;
 }
 
@@ -135,11 +163,13 @@ async function ensureData(): Promise<void> {
 }
 
 export async function readData(): Promise<DemoData> {
+  if (process.env.DATABASE_URL) return migrateData(await readPostgresData());
   await ensureData();
   return migrateData(JSON.parse(await fs.readFile(dataFile, "utf8")) as DemoData);
 }
 
 export async function mutateData<T>(fn: (data: DemoData) => Promise<T> | T): Promise<T> {
+  if (process.env.DATABASE_URL) return mutatePostgresData(fn);
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
   const previous = pending;
@@ -162,7 +192,7 @@ export function currentUser(data: DemoData, token: string | undefined): DemoUser
 }
 
 export function activeOrder(order: DemoOrder): boolean {
-  if (order.status === "approved" || order.status === "under_review" || order.status === "needs_revision") return true;
+  if (order.status === "approved" || order.status === "under_review" || order.status === "needs_revision" || order.status === "cancellation_review" || order.status === "refund_pending") return true;
   if (order.status === "assisted_draft") return Date.parse(order.holdUntil) > Date.now();
   return order.status === "awaiting_slip" && Date.parse(order.holdUntil) > Date.now();
 }
@@ -180,9 +210,15 @@ export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
   const visibleOrders = !me ? [] : data.orders
     .filter((order) => !hasRole(me, "customer") || order.userId === me.id)
     .map((order) => {
-      if (hasRole(me, "superadmin") || hasRole(me, "customer")) return order;
-      return {
+      const currentLabel = (item: { productId: string; optionId?: string; size?: string }) => data.products.find((product) => product.id === item.productId)?.options?.find((option) => option.id === item.optionId)?.label ?? item.size;
+      const displayOrder = {
         ...order,
+        items: order.items.map((item) => ({ ...item, size: currentLabel(item) })),
+        cancelledItems: order.cancelledItems?.map((item) => ({ ...item, size: currentLabel(item) })),
+      };
+      if (hasRole(me, "superadmin") || hasRole(me, "customer")) return displayOrder;
+      return {
+        ...displayOrder,
         slipFile: hasRole(me, "finance") ? order.slipFile : undefined,
         slipName: hasRole(me, "finance") ? order.slipName : undefined,
         dietaryNotes: hasRole(me, "tables") ? order.dietaryNotes : "",
@@ -201,8 +237,9 @@ export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
     users: me && hasRole(me, "superadmin") ? data.users.map(publicUser) : [],
     customers: me && canAssist(me) ? data.users.filter((user) => hasRole(user, "customer")).map(publicUser) : [],
     orderCustomers: me && !hasRole(me, "customer")
-      ? data.users.filter((user) => hasRole(user, "customer")).map(({ id, displayName, username }) => ({ id, displayName, username }))
+      ? data.users.filter((user) => hasRole(user, "customer")).map(({ id, displayName, username, phone }) => ({ id, displayName, username, ...(phone ? { phone } : {}) }))
       : [],
+    categories: data.categories ?? ["\u0e40\u0e2a\u0e37\u0e49\u0e2d", "\u0e41\u0e01\u0e49\u0e27\u0e19\u0e49\u0e33", "\u0e1c\u0e49\u0e32\u0e1e\u0e31\u0e19\u0e04\u0e2d"],
     audit: me && hasRole(me, "superadmin") ? data.audit.slice(-30).reverse() : [],
   };
 }

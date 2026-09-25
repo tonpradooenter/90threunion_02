@@ -1,5 +1,5 @@
 export type Role = "superadmin" | "tables" | "merch" | "finance" | "gate" | "customer";
-export type OrderStatus = "awaiting_slip" | "assisted_draft" | "under_review" | "needs_revision" | "approved" | "cancelled";
+export type OrderStatus = "awaiting_slip" | "assisted_draft" | "under_review" | "needs_revision" | "approved" | "cancellation_review" | "refund_pending" | "refunded" | "cancelled";
 export type OrderType = "table" | "product";
 
 export interface DemoUser {
@@ -26,7 +26,9 @@ export interface Product {
   image: string;
   category: string;
   sizes: string[];
+  options?: { id: string; label: string }[];
   active: boolean;
+  archived?: boolean;
 }
 
 export interface Zone {
@@ -38,11 +40,31 @@ export interface Zone {
 }
 
 export interface OrderItem {
+  id?: string;
   productId: string;
   name: string;
   quantity: number;
   unitPrice: number;
   size?: string;
+  optionId?: string;
+}
+
+export interface CancelledOrderItem extends OrderItem {
+  cancelledAt: string;
+  cancelReason: string;
+}
+
+export interface OrderRefund {
+  id: string;
+  amount: number;
+  reason: string;
+  status: "pending" | "refunded";
+  requestedAt: string;
+  completedAt?: string;
+  completedBy?: string;
+  reference?: string;
+  itemIds: string[];
+  tableIds: string[];
 }
 
 export interface DemoOrder {
@@ -52,9 +74,14 @@ export interface DemoOrder {
   status: OrderStatus;
   tableIds: string[];
   items: OrderItem[];
+  cancelledItems?: CancelledOrderItem[];
+  cancelledTables?: { id: string; cancelledAt: string; cancelReason: string }[];
+  refunds?: OrderRefund[];
   meal: string;
   dietaryNotes: string;
   amount: number;
+  paidAmount?: number;
+  tablePrices?: Record<string, number>;
   createdAt: string;
   holdUntil: string;
   slipFile?: string;
@@ -66,6 +93,7 @@ export interface DemoOrder {
   checkedInCodes: string[];
   pickupCode?: string;
   pickedUpAt?: string;
+  cancelledTicketCodes?: string[];
   assistedBy?: string;
   channel?: "phone" | "line" | "walkin" | "web";
   history?: { at: string; actor: string; summary: string }[];
@@ -87,6 +115,7 @@ export interface DemoData {
   orders: DemoOrder[];
   blockedTables: string[];
   audit: AuditEntry[];
+  categories?: string[];
 }
 
 export interface DemoSnapshot {
@@ -98,6 +127,7 @@ export interface DemoSnapshot {
   orders: DemoOrder[];
   users: PublicUser[];
   customers: PublicUser[];
-  orderCustomers: { id: string; displayName: string; username: string }[];
+  orderCustomers: { id: string; displayName: string; username: string; phone?: string }[];
+  categories: string[];
   audit: AuditEntry[];
 }

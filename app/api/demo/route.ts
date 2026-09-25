@@ -3,7 +3,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { activeOrder, currentUser, hasRole, hashPassword, logAction, mutateData, publicUser, readData, snapshot, verifyPassword } from "@/lib/demo-store";
 import { sameOrigin } from "@/lib/request-origin";
-import type { DemoData, DemoOrder, DemoUser, OrderItem, Role } from "@/lib/demo-types";
+import { cancelEntireOrder, completeRefund, orderIsUsed, recordRemovedSelections, resolveCancellation } from "@/lib/order-workflow";
+import type { DemoData, DemoOrder, DemoUser, OrderItem, OrderRefund, Role } from "@/lib/demo-types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,38 +47,46 @@ function productUsed(data: DemoData, productId: string, ignoreOrderId?: string):
     .reduce((sum, item) => sum + item.quantity, 0);
 }
 
-function selection(data: DemoData, body: Record<string, unknown>, type: "table" | "product", ignoreOrderId?: string) {
+function selection(data: DemoData, body: Record<string, unknown>, type: "table" | "product", ignoreOrderId?: string, allowEmpty = false) {
+  const existing = ignoreOrderId ? data.orders.find((order) => order.id === ignoreOrderId) : undefined;
   const tableIds = type === "table" && Array.isArray(body.tableIds) ? body.tableIds.map((v) => str(v, 8).toUpperCase()) : [];
-  const requested = type === "product" && Array.isArray(body.items) ? body.items as { productId?: unknown; quantity?: unknown; size?: unknown }[] : [];
+  const requested = type === "product" && Array.isArray(body.items) ? body.items as { id?: unknown; productId?: unknown; quantity?: unknown; optionId?: unknown; size?: unknown }[] : [];
   const items: OrderItem[] = [];
+  const tablePrices: Record<string, number> = {};
   const requestedQuantity = new Map<string, number>();
   let amount = 0;
   if (type === "table") {
-    if (!tableIds.length || tableIds.length > 6 || new Set(tableIds).size !== tableIds.length) throw new AppError("เลือกได้ครั้งละ 1–6 โต๊ะ");
+    if ((!tableIds.length && !allowEmpty) || tableIds.length > 6 || new Set(tableIds).size !== tableIds.length) throw new AppError("เลือกได้ครั้งละ 1–6 โต๊ะ");
     for (const id of tableIds) {
       const match = /^([A-J])-(0[1-9]|[1-5][0-9]|60)$/.exec(id);
       if (!match) throw new AppError("หมายเลขโต๊ะไม่ถูกต้อง");
       if (data.blockedTables.includes(id) || data.orders.some((order) => order.id !== ignoreOrderId && activeOrder(order) && order.tableIds.includes(id))) throw new AppError(`โต๊ะ ${id} ถูกจองแล้ว กรุณาเลือกใหม่`);
-      amount += data.zones.find((zone) => zone.id === match[1])?.price ?? 0;
+      const price = existing?.tablePrices?.[id] ?? data.zones.find((zone) => zone.id === match[1])?.price ?? 0;
+      tablePrices[id] = price;
+      amount += price;
     }
   } else {
-    if (!requested.length || requested.length > 20) throw new AppError("กรุณาเลือกสินค้า");
+    if ((!requested.length && !allowEmpty) || requested.length > 20) throw new AppError("กรุณาเลือกสินค้า");
     for (const entry of requested) {
-      const product = data.products.find((p) => p.id === str(entry.productId, 80) && p.active);
+      const product = data.products.find((p) => p.id === str(entry.productId, 80) && (p.active || !!existing?.items.some((item) => item.productId === p.id)) && !p.archived);
       if (!product) throw new AppError("ไม่พบสินค้า");
-      const quantity = int(entry.quantity, 1, 20);
-      const size = str(entry.size, 20);
-      if (product.sizes.length && !product.sizes.includes(size)) throw new AppError(`กรุณาเลือกไซซ์ของ ${product.name}`);
+      const quantity = int(entry.quantity, 0, 20);
+      if (quantity === 0) continue;
+      const optionId = str(entry.optionId, 80);
+      const legacySize = str(entry.size, 30);
+      const options = product.options ?? [];
+      const option = options.find((choice) => choice.id === optionId) ?? options.find((choice) => choice.label === legacySize);
+      if (options.length && !option) throw new AppError(`กรุณาเลือกคุณลักษณะของ ${product.name}`);
       const cumulative = (requestedQuantity.get(product.id) ?? 0) + quantity;
       if (product.stock - productUsed(data, product.id, ignoreOrderId) < cumulative) throw new AppError(`${product.name} เหลือไม่พอ`);
       requestedQuantity.set(product.id, cumulative);
-      items.push({ productId: product.id, name: product.name, quantity, unitPrice: product.price, ...(size ? { size } : {}) });
-      amount += product.price * quantity;
+      const original = existing?.items.find((item) => item.id === str(entry.id, 100) && item.productId === product.id && (item.optionId ?? "") === (option?.id ?? ""));
+      items.push({ id: original?.id ?? randomUUID(), productId: product.id, name: product.name, quantity, unitPrice: original?.unitPrice ?? product.price, ...(option ? { optionId: option.id, size: option.label } : {}) });
+      amount += (original?.unitPrice ?? product.price) * quantity;
     }
   }
-  return { tableIds, items, amount };
+  return { tableIds, items, tablePrices, amount };
 }
-
 function responseError(error: unknown): NextResponse {
   if (error instanceof AppError) return NextResponse.json({ error: error.message }, { status: error.status });
   console.error("Demo API error", error);
@@ -121,12 +130,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       const username = str(body.username, 40).toLowerCase();
       const displayName = str(body.displayName, 80);
       const password = str(body.password, 200);
+      const phone = str(body.phone, 30);
+      if (phone && !/^[0-9+() -]{8,30}$/.test(phone)) throw new AppError("เบอร์โทรศัพท์ไม่ถูกต้อง");
       if (!/^[a-z0-9_.]{4,40}$/.test(username)) throw new AppError("ชื่อผู้ใช้ต้องมี 4–40 ตัว ใช้อักษรอังกฤษ ตัวเลข จุด หรือ _");
       if (displayName.length < 2 || password.length < 8) throw new AppError("กรุณากรอกชื่อและรหัสผ่านอย่างน้อย 8 ตัว");
       const sessionToken = randomBytes(32).toString("hex");
       const user = await mutateData((data) => {
         if (data.users.some((entry) => entry.username === username)) throw new AppError("ชื่อผู้ใช้นี้ถูกใช้แล้ว");
-        const created: DemoUser = { id: randomUUID(), username, displayName, passwordHash: hashPassword(password), role: "customer", roles: ["customer"], contactSource: "web", active: true, createdAt: new Date().toISOString() };
+        if (phone && data.users.some((entry) => entry.phone === phone)) throw new AppError("เบอร์โทรนี้มีบัญชีแล้ว");
+        const created: DemoUser = { id: randomUUID(), username, displayName, passwordHash: hashPassword(password), role: "customer", roles: ["customer"], phone: phone || undefined, contactSource: "web", active: true, createdAt: new Date().toISOString() };
         data.users.push(created);
         data.sessions.push({ token: sessionToken, userId: created.id, expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() });
         logAction(data, created.id, "register", username);
@@ -151,11 +163,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         requireRole(me, ["customer", "superadmin"]);
         const type = body.type === "table" ? "table" : body.type === "product" ? "product" : null;
         if (!type) throw new AppError("ประเภทคำสั่งซื้อไม่ถูกต้อง");
-        const { tableIds, items, amount } = selection(data, body, type);
+        const { tableIds, items, tablePrices, amount } = selection(data, body, type);
         const now = new Date();
         const order: DemoOrder = {
           id: `SR90-${now.getFullYear()}-${randomBytes(6).toString("hex").toUpperCase()}`,
-          userId: me.id, type, status: "awaiting_slip", tableIds, items,
+          userId: me.id, type, status: "awaiting_slip", tableIds, items, tablePrices,
           meal: type === "table" ? str(body.meal, 100) || "ชุดอาหารมาตรฐาน" : "",
           dietaryNotes: type === "table" ? str(body.dietaryNotes, 500) : "",
           amount, createdAt: now.toISOString(), holdUntil: new Date(now.getTime() + 20 * 60 * 1000).toISOString(),
@@ -191,21 +203,49 @@ export async function POST(request: Request): Promise<NextResponse> {
         const type = existing?.type ?? (body.type === "table" ? "table" : body.type === "product" ? "product" : null);
         if (!type) throw new AppError("ประเภทคำสั่งซื้อไม่ถูกต้อง");
         requireRole(me, type === "table" ? ["superadmin", "tables"] : ["superadmin", "merch"]);
-        if (existing && !["assisted_draft", "awaiting_slip", "needs_revision"].includes(existing.status)) throw new AppError("รายการที่ส่งตรวจหรืออนุมัติแล้วแก้ไขไม่ได้");
+        if (existing && !["assisted_draft", "awaiting_slip", "needs_revision", "approved"].includes(existing.status)) throw new AppError("รายการนี้แก้ไขไม่ได้");
         const customer = data.users.find((entry) => entry.id === (existing?.userId ?? str(body.userId, 80)) && entry.active && hasRole(entry, "customer"));
         if (!customer) throw new AppError("ไม่พบบัญชีลูกค้า", 404);
-        const { tableIds, items, amount } = selection(data, body, type, existing?.id);
+        const { tableIds, items, tablePrices, amount } = selection(data, body, type, existing?.id, !!existing);
         const now = new Date();
         const channel = str(body.channel, 20);
         if (!["phone", "line", "walkin"].includes(channel)) throw new AppError("กรุณาเลือกช่องทางที่ลูกค้าติดต่อ");
+        const reason = str(body.reason, 200) || "ลูกค้าขอปรับรายการ";
+        if (existing && !tableIds.length && !items.length) {
+          try { cancelEntireOrder(existing, me, reason); }
+          catch (error) { throw new AppError(error instanceof Error && error.message === "ALREADY_USED" ? "ใช้ตั๋วหรือรับสินค้าแล้ว ต้องให้ผู้ดูแลหลักพิจารณา" : "รายการนี้ยกเลิกไม่ได้"); }
+          logAction(data, me.id, "cancel_assisted_order", `${existing.id}: ${reason}`);
+          return { order: existing };
+        }
+        if (existing?.status === "approved") {
+          if (orderIsUsed(existing)) throw new AppError("ใช้ตั๋วหรือรับสินค้าแล้ว ต้องให้ผู้ดูแลหลักพิจารณา");
+          if (tableIds.some((id) => !existing.tableIds.includes(id)) || items.some((item) => !existing.items.some((old) => old.id === item.id && item.quantity <= old.quantity))) {
+            throw new AppError("รายการที่ชำระแล้วลดหรือยกเลิกได้เท่านั้น หากต้องการเพิ่มให้สร้างรายการใหม่");
+          }
+          const refundAmount = recordRemovedSelections(existing, tableIds, items, me, reason);
+          if (!refundAmount) throw new AppError("ยังไม่มีการลดรายการ");
+          const removedTables = existing.tableIds.filter((id) => !tableIds.includes(id));
+          const removedItemIds = existing.items.filter((old) => !items.some((item) => item.id === old.id && item.quantity === old.quantity)).map((item) => item.id ?? item.productId);
+          const refund: OrderRefund = { id: randomUUID(), amount: refundAmount, reason, status: "pending", requestedAt: now.toISOString(), itemIds: removedItemIds, tableIds: removedTables };
+          existing.refunds = [...(existing.refunds ?? []), refund];
+          existing.paidAmount ??= existing.amount;
+          existing.tableIds = tableIds;
+          existing.items = items;
+          existing.tablePrices = tablePrices;
+          existing.amount = amount;
+          logAction(data, me.id, "partial_cancel_paid", `${existing.id}: ${refundAmount}`);
+          return { order: existing };
+        }
         const summary = existing ? `เจ้าหน้าที่แก้ไขรายการ ยอดเดิม ฿${existing.amount} → ฿${amount}` : `เจ้าหน้าที่รับรายการทาง ${channel}`;
         const order: DemoOrder = existing ?? {
           id: `SR90-${now.getFullYear()}-${randomBytes(6).toString("hex").toUpperCase()}`,
           userId: customer.id, type, status: "assisted_draft", tableIds: [], items: [], meal: "", dietaryNotes: "", amount: 0,
           createdAt: now.toISOString(), holdUntil: "", ticketCodes: [], checkedInCodes: [], history: [],
         };
+        if (existing) recordRemovedSelections(order, tableIds, items, me, reason);
         order.tableIds = tableIds;
         order.items = items;
+        order.tablePrices = tablePrices;
         order.amount = amount;
         order.meal = type === "table" ? str(body.meal, 100) || "ชุดอาหารมาตรฐาน" : "";
         order.dietaryNotes = type === "table" ? str(body.dietaryNotes, 500) : "";
@@ -223,16 +263,14 @@ export async function POST(request: Request): Promise<NextResponse> {
         logAction(data, me.id, existing ? "update_assisted_order" : "create_assisted_order", `${order.id} → ${customer.username}: ${summary}`);
         return { order };
       }
-
       if (action === "cancelAssistedOrder") {
         const order = data.orders.find((entry) => entry.id === str(body.orderId, 60));
         if (!order) throw new AppError("ไม่พบคำสั่งซื้อ", 404);
         requireRole(me, order.type === "table" ? ["superadmin", "tables"] : ["superadmin", "merch"]);
-        if (!["assisted_draft", "awaiting_slip", "needs_revision"].includes(order.status)) throw new AppError("รายการที่ส่งตรวจหรืออนุมัติแล้วต้องให้ฝ่ายการเงินดำเนินการ");
         const reason = str(body.reason, 200);
         if (reason.length < 3) throw new AppError("กรุณาระบุเหตุผลการยกเลิก");
-        order.status = "cancelled";
-        order.history = [...(order.history ?? []), { at: new Date().toISOString(), actor: me.displayName, summary: `ยกเลิก: ${reason}` }];
+        try { cancelEntireOrder(order, me, reason); }
+        catch (error) { throw new AppError(error instanceof Error && error.message === "ALREADY_USED" ? "ใช้ตั๋วหรือรับสินค้าแล้ว ต้องให้ผู้ดูแลหลักพิจารณา" : "รายการนี้ยกเลิกไปแล้ว"); }
         logAction(data, me.id, "cancel_assisted_order", `${order.id}: ${reason}`);
         return { order };
       }
@@ -241,12 +279,36 @@ export async function POST(request: Request): Promise<NextResponse> {
         const order = data.orders.find((entry) => entry.id === str(body.orderId, 60));
         if (!order) throw new AppError("ไม่พบคำสั่งซื้อ", 404);
         if (order.userId !== me.id && !hasRole(me, "superadmin")) throw new AppError("ไม่มีสิทธิ์ยกเลิก", 403);
-        if (order.status === "approved") throw new AppError("รายการที่อนุมัติแล้วต้องติดต่อเจ้าหน้าที่");
-        order.status = "cancelled";
+        if (order.status === "approved" && !hasRole(me, "superadmin")) throw new AppError("รายการที่ชำระแล้วกรุณาติดต่อเจ้าหน้าที่");
+        try { cancelEntireOrder(order, me, str(body.reason, 200) || "ลูกค้าขอยกเลิก"); }
+        catch (error) { throw new AppError(error instanceof Error && error.message === "ALREADY_USED" ? "ใช้ตั๋วหรือรับสินค้าแล้ว ต้องให้ผู้ดูแลหลักพิจารณา" : "รายการนี้ยกเลิกไปแล้ว"); }
         logAction(data, me.id, "cancel_order", order.id);
         return { order };
       }
 
+      if (action === "resolveCancellation") {
+        requireRole(me, ["superadmin", "finance"]);
+        const order = data.orders.find((entry) => entry.id === str(body.orderId, 60));
+        if (!order) throw new AppError("ไม่พบคำสั่งซื้อ", 404);
+        const reference = str(body.reference, 150);
+        if (reference.length < 3) throw new AppError("กรุณาระบุผลตรวจหรือเลขอ้างอิง");
+        try { resolveCancellation(order, me, body.paymentFound === true, reference); }
+        catch { throw new AppError("รายการนี้ไม่ได้รอการเงินตรวจการยกเลิก"); }
+        logAction(data, me.id, "resolve_cancellation", `${order.id}: ${body.paymentFound === true ? "พบยอด" : "ไม่พบยอด"}`);
+        return { order };
+      }
+
+      if (action === "completeRefund") {
+        requireRole(me, ["superadmin", "finance"]);
+        const order = data.orders.find((entry) => entry.id === str(body.orderId, 60));
+        if (!order) throw new AppError("ไม่พบคำสั่งซื้อ", 404);
+        const reference = str(body.reference, 150);
+        if (reference.length < 3) throw new AppError("กรุณาใส่เลขอ้างอิงการคืนเงินจริง");
+        try { completeRefund(order, str(body.refundId, 80), me, reference); }
+        catch { throw new AppError("ไม่พบงานคืนเงินที่รอดำเนินการ"); }
+        logAction(data, me.id, "complete_refund", `${order.id}: ${reference}`);
+        return { order };
+      }
       if (action === "reviewOrder") {
         requireRole(me, ["superadmin", "finance"]);
         const order = data.orders.find((entry) => entry.id === str(body.orderId, 60));
@@ -261,11 +323,23 @@ export async function POST(request: Request): Promise<NextResponse> {
         order.reviewedBy = me.id;
         order.reviewedAt = new Date().toISOString();
         if (decision === "approve") {
+          order.paidAmount = order.amount;
           if (order.type === "table") order.ticketCodes = order.tableIds.flatMap((id) => Array.from({ length: 8 }, (_, index) => `${id}-${index + 1}-${randomBytes(2).toString("hex").toUpperCase()}`));
           else order.pickupCode = `PICK-${randomBytes(4).toString("hex").toUpperCase()}`;
         }
         logAction(data, me.id, decision === "approve" ? "approve_order" : "request_revision", order.id);
         return { order };
+      }
+
+      if (action === "addCategory") {
+        requireRole(me, ["superadmin", "merch"]);
+        const name = str(body.name, 60);
+        if (name.length < 2) throw new AppError("กรุณาใส่ชื่อประเภทอย่างน้อย 2 ตัว");
+        data.categories ??= [];
+        if (data.categories.some((category) => category.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new AppError("มีประเภทนี้แล้ว");
+        data.categories.push(name);
+        logAction(data, me.id, "add_category", name);
+        return { category: name };
       }
 
       if (action === "saveProduct") {
@@ -277,21 +351,45 @@ export async function POST(request: Request): Promise<NextResponse> {
         const price = int(body.price, 0, 1_000_000);
         const stock = int(body.stock, 0, 1_000_000);
         const image = str(body.image, 300);
+        const category = str(body.category, 60);
         if (name.length < 2) throw new AppError("กรุณาใส่ชื่อสินค้า");
+        if (!data.categories?.includes(category)) throw new AppError("กรุณาเลือกประเภทสินค้าที่มีอยู่");
         if (image && !/^\/(assets|uploads)\/[a-zA-Z0-9._/-]+$/.test(image)) throw new AppError("ตำแหน่งรูปภาพไม่ถูกต้อง");
         const used = existing ? productUsed(data, existing.id) : 0;
         if (stock < used) throw new AppError(`สต็อกต่ำกว่าจำนวนที่จอง/ขายแล้ว (${used})`);
+        const requested = Array.isArray(body.options) ? body.options as { id?: unknown; label?: unknown }[] : [];
+        if (requested.length > 30) throw new AppError("คุณลักษณะมากเกินไป");
+        const options = requested.map((entry) => ({ id: str(entry.id, 80) || randomUUID(), label: str(entry.label, 30) }));
+        if (options.some((option) => !option.label) || new Set(options.map((option) => option.id)).size !== options.length || new Set(options.map((option) => option.label.toLocaleLowerCase())).size !== options.length) throw new AppError("คุณลักษณะซ้ำหรือว่าง");
+        if (existing) {
+          const removedIds = (existing.options ?? []).filter((option) => !options.some((current) => current.id === option.id)).map((option) => option.id);
+          const usedOption = data.orders.some((order) => activeOrder(order) && order.items.some((item) => item.productId === existing.id && removedIds.includes(item.optionId ?? "")));
+          if (usedOption) throw new AppError("ลบคุณลักษณะที่มีลูกค้าสั่งอยู่ไม่ได้ กรุณาย้ายหรือยกเลิกรายการก่อน");
+        }
         const product = {
           id: existing?.id ?? randomUUID(), name, description, price, stock,
-          image: image || "/assets/souvenir-unbranded.png", category: str(body.category, 60) || "ของที่ระลึก",
-          sizes: Array.isArray(body.sizes) ? body.sizes.map((s) => str(s, 15)).filter(Boolean).slice(0, 10) : existing?.sizes ?? [],
-          active: body.active !== false,
+          image: image || "/assets/souvenir-unbranded.png", category,
+          sizes: options.map((option) => option.label), options,
+          active: body.active !== false, archived: false,
         };
         if (existing) Object.assign(existing, product); else data.products.push(product);
         logAction(data, me.id, "save_product", product.name);
         return { product };
       }
 
+      if (action === "deleteProduct") {
+        requireRole(me, ["superadmin", "merch"]);
+        const id = str(body.id, 80);
+        const product = data.products.find((entry) => entry.id === id);
+        if (!product) throw new AppError("ไม่พบสินค้า", 404);
+        if (data.orders.some((order) => activeOrder(order) && order.items.some((item) => item.productId === id))) throw new AppError("ยังมีลูกค้าถือรายการสินค้านี้อยู่ กรุณายกเลิกหรือปิดขายก่อน");
+        // Keep a hidden product record when cancelled orders still refer to its stable option IDs.
+        const hasHistory = data.orders.some((order) => [...order.items, ...(order.cancelledItems ?? [])].some((item) => item.productId === id));
+        if (hasHistory) { product.archived = true; product.active = false; }
+        else data.products = data.products.filter((entry) => entry.id !== id);
+        logAction(data, me.id, "delete_product", `${product.id}: ${product.name}`);
+        return { id };
+      }
       if (action === "saveZone") {
         requireRole(me, ["superadmin", "tables"]);
         const zone = data.zones.find((entry) => entry.id === str(body.id, 1));
@@ -301,12 +399,59 @@ export async function POST(request: Request): Promise<NextResponse> {
         return { zone };
       }
 
+      if (action === "updateUser") {
+        requireRole(me, ["superadmin"]);
+        const target = data.users.find((entry) => entry.id === str(body.userId, 80));
+        if (!target) throw new AppError("ไม่พบบัญชี", 404);
+        const displayName = str(body.displayName, 80);
+        const username = str(body.username, 40).toLowerCase();
+        const phone = str(body.phone, 30);
+        const password = str(body.password, 200);
+        if (displayName.length < 2 || !/^[a-z0-9_.]{4,40}$/.test(username)) throw new AppError("ชื่อหรือชื่อผู้ใช้ไม่ถูกต้อง");
+        if (phone && !/^[0-9+() -]{8,30}$/.test(phone)) throw new AppError("เบอร์โทรศัพท์ไม่ถูกต้อง");
+        if (data.users.some((entry) => entry.id !== target.id && entry.username === username)) throw new AppError("ชื่อผู้ใช้นี้มีแล้ว");
+        if (phone && data.users.some((entry) => entry.id !== target.id && entry.phone === phone)) throw new AppError("เบอร์โทรนี้มีบัญชีแล้ว");
+        if (password && password.length < 8) throw new AppError("รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัว");
+        if (target.id === me.id && body.active === false) throw new AppError("ปิดบัญชีที่กำลังใช้งานไม่ได้");
+        target.displayName = displayName;
+        target.username = username;
+        target.phone = phone || undefined;
+        target.active = body.active !== false;
+        if (password) { target.passwordHash = hashPassword(password); data.sessions = data.sessions.filter((session) => session.userId !== target.id); }
+        if (!target.active) data.sessions = data.sessions.filter((session) => session.userId !== target.id);
+        logAction(data, me.id, "update_user", target.id);
+        return { user: publicUser(target) };
+      }
+
+      if (action === "deleteUser") {
+        requireRole(me, ["superadmin"]);
+        const target = data.users.find((entry) => entry.id === str(body.userId, 80));
+        if (!target) throw new AppError("ไม่พบบัญชี", 404);
+        if (target.id === me.id) throw new AppError("ลบบัญชีที่กำลังใช้งานไม่ได้");
+        const hasOrders = data.orders.some((order) => order.userId === target.id || order.assistedBy === target.id || order.reviewedBy === target.id);
+        const hasBusinessAudit = data.audit.some((entry) => entry.actorId === target.id && !["register", "create_customer"].includes(entry.action));
+        data.sessions = data.sessions.filter((session) => session.userId !== target.id);
+        if (hasOrders || hasBusinessAudit) {
+          target.username = `deleted_${target.id.replaceAll("-", "").slice(0, 20)}`;
+          target.displayName = "บัญชีที่ปิดแล้ว";
+          target.phone = undefined;
+          target.passwordHash = hashPassword(randomBytes(24).toString("hex"));
+          target.active = false;
+          logAction(data, me.id, "deactivate_user", target.id);
+          return { archived: true };
+        }
+        data.users = data.users.filter((entry) => entry.id !== target.id);
+        logAction(data, me.id, "delete_user", target.id);
+        return { deleted: true };
+      }
       if (action === "setRoles" || action === "setRole") {
         requireRole(me, ["superadmin"]);
         const target = data.users.find((entry) => entry.id === str(body.userId, 80));
         const assigned = (Array.isArray(body.roles) ? body.roles : [body.role]).map((value) => str(value, 20) as Role);
         if (!target || !assigned.length || assigned.length > 5 || new Set(assigned).size !== assigned.length || assigned.some((role) => !roles.includes(role))) throw new AppError("ข้อมูลผู้ใช้หรือบทบาทไม่ถูกต้อง");
         if ((assigned.includes("customer") || assigned.includes("superadmin")) && assigned.length !== 1) throw new AppError("ลูกค้าและผู้ดูแลระบบหลักต้องเป็นบทบาทเดี่ยว");
+        if (!target.active) throw new AppError("บัญชีนี้ถูกปิดแล้ว");
+        if (hasRole(target, "customer") !== assigned.includes("customer") && data.orders.some((order) => order.userId === target.id)) throw new AppError("บัญชีลูกค้าที่มีคำสั่งซื้อไม่ควรเปลี่ยนเป็นเจ้าหน้าที่ กรุณาสร้างบัญชีเจ้าหน้าที่แยก");
         if (target.id === me.id && !assigned.includes("superadmin")) throw new AppError("ไม่สามารถลดสิทธิ์บัญชีที่กำลังใช้งาน");
         target.roles = assigned;
         target.role = assigned[0];
