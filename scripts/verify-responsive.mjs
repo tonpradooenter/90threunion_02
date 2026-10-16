@@ -13,7 +13,7 @@ export async function verifyResponsive(origin, customerCookie) {
         const page = await context.newPage();
         const failures = [];
         page.on("pageerror", (error) => failures.push(error.message));
-        await page.goto(origin, { waitUntil: "networkidle" });
+        await page.goto(origin, { waitUntil: "domcontentloaded" });
         await page.locator(".hero h1").waitFor();
         await page.evaluate(() => document.fonts.ready);
         const layout = await page.evaluate(() => {
@@ -46,7 +46,8 @@ export async function verifyResponsive(origin, customerCookie) {
 
         const cookieValue = customerCookie.slice(customerCookie.indexOf("=") + 1);
         await context.addCookies([{ name: "sisat_demo_session", value: cookieValue, url: origin, sameSite: "Strict", httpOnly: true }]);
-        await page.reload({ waitUntil: "networkidle" });
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await page.locator(".account-pill").waitFor();
         await page.locator(".hero h1").waitFor();
         if (width <= 1100) await page.locator(".mobile-dock").getByRole("button", { name: "ออเดอร์", exact: true }).click();
         else await page.locator(".main-nav").getByRole("button", { name: "คำสั่งซื้อของฉัน", exact: true }).click();
