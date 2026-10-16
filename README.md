@@ -1,9 +1,11 @@
-# SISAT 90 Reunion — v1.0.0 Demo
+# SISAT 90 Reunion — v1.1.0 Demo
 
 เว็บคืนสู่เหย้า 90 ปี วิทยาลัยเทคนิคศรีสะเกษ ใช้ **Next.js + Node.js 24 + MariaDB 11.8** สำหรับทดลองบน Hostatom/Plesk เป้าหมายผู้ทดสอบไม่เกิน 30 คนพร้อมกัน ยังเป็นข้อมูลสาธิต ไม่มีการโอนเงินอัตโนมัติ
 
-- **รุ่นสำหรับ Hostatom:** branch `release/v1-hostatom-demo` / tag `v1.0.0-demo`
+- **รุ่นสำหรับ Hostatom:** branch `release/v1.1-security-tablet` / tag `v1.1.0-demo`
 - **ติดตั้งบนโฮสต์:** [คู่มือติดตั้ง Hostatom/Plesk](docs/INSTALL_HOSTATOM.md)
+- **อัปเดตเว็บเดิมแบบง่าย:** [UPDATE_HOSTATOM](docs/UPDATE_HOSTATOM.md)
+- **ความปลอดภัยและขอบเขตการเข้ารหัส:** [SECURITY](docs/SECURITY.md)
 - **สิ่งที่เปลี่ยน:** [CHANGELOG](CHANGELOG.md)
 - `main` และ branch รุ่นเก่ายังคงเป็นจุดอ้างอิงก่อนย้าย MariaDB ไม่ใช่ชุดติดตั้ง Hostatom v1
 - ไม่มีรหัสโฮสต์/ฐานข้อมูลจริง ข้อมูล runtime หรือสลิปใน Git

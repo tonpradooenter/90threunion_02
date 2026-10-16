@@ -1,14 +1,14 @@
-# ติดตั้ง SISAT 90 v1 บน Hostatom / Plesk
+# ติดตั้ง SISAT 90 v1.1 บน Hostatom / Plesk
 
 คู่มือนี้ใช้สำหรับ **เดโมไม่เกิน 30 คนพร้อมกัน** บน **90thsisat.tonpradoo.com** โดยแยกจาก WordPress ที่ tonpradoo.com
 
 ## 1. ดาวน์โหลดรุ่นให้ถูกต้อง
 
-ใช้ branch `release/v1-hostatom-demo` หรือ tag `v1.0.0-demo` จาก https://github.com/tonpradooenter/90threunion_02
+ใช้ branch `release/v1.1-security-tablet` หรือ tag `v1.1.0-demo` จาก https://github.com/tonpradooenter/90threunion_02
 
 เลือก Code → Download ZIP บน branch นี้ หรือดาวน์โหลด tag อย่าใช้ main รุ่นเก่าติดตั้งบน MariaDB
 
-ชุดที่ได้ต้องมี `package.json` เวอร์ชัน 1.0.0, `app.cjs`, `app/`, `lib/`, `public/`, `scripts/` และ `package-lock.json`
+ชุดที่ได้ต้องมี `package.json` เวอร์ชัน 1.1.0, `app.cjs`, `app/`, `lib/`, `public/`, `scripts/` และ `package-lock.json`
 
 ## 2. สร้าง subdomain และโฟลเดอร์แยก
 
@@ -148,7 +148,7 @@ db:setup สร้างตารางและบัญชีเดโม 6 �
 
 ## 8. ตรวจว่าใช้งานได้
 
-1. เปิด https://90thsisat.tonpradoo.com/api/health ต้องได้ status: ok และ version: 1.0.0
+1. เปิด https://90thsisat.tonpradoo.com/api/health ต้องได้ status: ok และ version: 1.1.0
 2. เข้าเว็บด้วย customer และรหัส DEMO_PASSWORD ที่ตั้งไว้ ลองจองโต๊ะ/สินค้า
 3. เข้า finance ตรวจสลิปและอนุมัติ; กลับ customer ดู QR
 4. เข้า gate ตรวจ QR ซ้ำต้องไม่ผ่าน
@@ -161,6 +161,9 @@ db:setup สร้างตารางและบัญชีเดโม 6 �
 สลิป 3 รูป รูปละ 5 MB ใช้คำขอรวมเกือบ 15 MB; หากอัปโหลดถูกปฏิเสธด้วย 413 ให้ Hostatom ตั้งขนาด request body ของ **subdomain นี้** อย่างน้อย 16 MB อย่าแก้ค่าทั้งเซิร์ฟเวอร์เพื่อทดสอบ
 
 ## 9. อัปเดตและย้อนกลับ
+
+สำหรับเว็บที่เปิดใช้อยู่แล้ว ใช้ [คู่มืออัปเดตแบบง่าย](UPDATE_HOSTATOM.md) รุ่นนี้ต้องรัน security:migrate เพื่อเข้ารหัสสลิปเก่าและเก็บกุญแจตาม [SECURITY](SECURITY.md)
+
 
 - ก่อนอัปเดต สำรอง MariaDB ของเดโมและโฟลเดอร์ 90thsisat-storage
 - อัปโหลด source รุ่นใหม่เฉพาะ 90thsisat.tonpradoo.com; คง storage และ environment variables ไว้

@@ -96,7 +96,7 @@ try {
   const review = (await snapshot(cookies.customer)).orders.find((o) => o.id === order.id);
   assert.equal(review.slips.length, 3);
   const saved = await readFile(path.join(storage, "slips", review.slips[0].filename));
-  assert.equal(saved.subarray(0, 11).toString(), "SISAT-SLIP-1");
+  assert.equal(saved.subarray(0, 12).toString(), "SISAT-SLIP-1");
   assert.ok(!saved.equals(png));
   const slipPath = "/api/slip?orderId=" + encodeURIComponent(order.id) + "&slipId=" + review.slips[0].id;
   assert.equal((await fetch(origin + slipPath)).status, 401);
