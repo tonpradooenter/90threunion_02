@@ -17,6 +17,9 @@ it("encrypts slips with independent nonces and detects tampering", async () => {
     const second = await encryptSlip(image);
     assert.ok(encryptedSlip(first));
     assert.notDeepEqual(first, second);
+    const damagedHeader = Buffer.from(second);
+    damagedHeader[0] ^= 1;
+    await assert.rejects(() => decryptSlip(damagedHeader));
     assert.ok(!first.includes(image));
     assert.deepEqual(await decryptSlip(first), image);
     first[first.length - 1] ^= 1;
@@ -51,4 +54,12 @@ it("limits login attempts and reopens the window after the retry time", () => {
   assert.equal(blocked.allowed, false);
   assert.equal(blocked.retryAfter, 60);
   assert.equal(loginAllowed("test-limit-identity", now + 60_001).allowed, true);
+});
+
+it("rejects a streamed request body over the limit without trusting Content-Length", async () => {
+  const { readLimitedText, BodyTooLarge } = await import("../lib/request-body");
+  const accepted = new Request("http://localhost/api/demo", { method: "POST", body: '{"action":"login"}' });
+  assert.equal(await readLimitedText(accepted, 100), '{"action":"login"}');
+  const rejected = new Request("http://localhost/api/demo", { method: "POST", body: "x".repeat(101) });
+  await assert.rejects(() => readLimitedText(rejected, 100), BodyTooLarge);
 });

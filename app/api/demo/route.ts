@@ -8,6 +8,7 @@ import { defaultBranding, settingsOf, validSiteImage } from "@/lib/site-settings
 import type { DemoData, DemoOrder, DemoUser, OrderItem, OrderRefund, Role } from "@/lib/demo-types";
 
 import { loginAllowed } from "@/lib/login-limit";
+import { BodyTooLarge, readLimitedText } from "@/lib/request-body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -110,7 +111,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     if (!sameOrigin(request)) throw new AppError("คำขอมาจากเว็บไซต์อื่น", 403);
     if (Number(request.headers.get("content-length") ?? 0) > 100_000) throw new AppError("ข้อมูลมีขนาดใหญ่เกินไป", 413);
-    const raw = await request.text();
+    let raw: string;
+    try { raw = await readLimitedText(request, 100_000); }
+    catch (error) { if (error instanceof BodyTooLarge) throw new AppError("ข้อมูลมีขนาดใหญ่เกินไป", 413); throw error; }
     if (Buffer.byteLength(raw, "utf8") > 100_000) throw new AppError("ข้อมูลมีขนาดใหญ่เกินไป", 413);
     let body: Record<string, unknown>;
     try {

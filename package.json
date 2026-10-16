@@ -19,7 +19,8 @@
     "start:plesk": "node app.cjs",
     "release:zip": "node scripts/package-release.mjs",
     "test:api": "node --env-file-if-exists=.env.mariadb.local scripts/verify-http.mjs",
-    "security:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/security-migrate.ts"
+    "security:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/security-migrate.ts",
+    "test:bundle": "node scripts/check-client-bundle.mjs"
   },
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.2.8",
