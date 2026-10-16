@@ -1,4 +1,4 @@
-name: v1 checks
+name: release checks
 on:
   push:
     branches: [main, "release/**", "feature/**"]
@@ -38,15 +38,24 @@ jobs:
         env:
           TEST_DATABASE_URL: mariadb://root:ci-only-ephemeral-password@127.0.0.1:3306/sisat_test_v1
       - run: npm run build
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:api
         env:
+          RUN_BROWSER_TESTS: "1"
           TEST_DATABASE_URL: mariadb://root:ci-only-ephemeral-password@127.0.0.1:3306/sisat_test_v1
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run release:zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: sisat90-v1-hostatom-source
+          name: sisat90-hostatom-source
           path: |
             releases/*.zip
             releases/*.sha256
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: responsive-screenshots
+          path: playwright-report/*.png
+          if-no-files-found: ignore
           retention-days: 14

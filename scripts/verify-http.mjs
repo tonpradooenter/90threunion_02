@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -57,6 +57,19 @@ try {
     assert.ok(res.headers.get("set-cookie")?.includes("HttpOnly"));
     return res.headers.get("set-cookie").split(";")[0];
   };
+  for (const filename of ["/.env.local", "/.git/config", "/package.json", "/sisat90-v1.0.0-hostatom-source.zip"]) {
+    const response = await fetch(origin + filename);
+    assert.equal(response.status, 404);
+    assert.ok(!(await response.text()).includes(password));
+  }
+  const guest = await (await fetch(origin + "/api/demo")).json();
+  assert.deepEqual(guest.orders, []);
+  assert.deepEqual(guest.users, []);
+  assert.deepEqual(guest.customers, []);
+  assert.ok(!JSON.stringify(guest).includes("passwordHash"));
+  const pageHeaders = await fetch(origin);
+  assert.ok(pageHeaders.headers.get("content-security-policy")?.includes("object-src 'none'"));
+  assert.ok(pageHeaders.headers.get("strict-transport-security"));
   const cookies = {};
   for (const username of ["customer", "superadmin", "tableadmin", "shopadmin", "finance", "gate"]) cookies[username] = await login(username);
   const snapshot = async (cookie) => (await fetch(origin + "/api/demo", { headers: { Cookie: cookie } })).json();
@@ -82,11 +95,18 @@ try {
   assert.equal((await slips(3)).status, 200);
   const review = (await snapshot(cookies.customer)).orders.find((o) => o.id === order.id);
   assert.equal(review.slips.length, 3);
+  const saved = await readFile(path.join(storage, "slips", review.slips[0].filename));
+  assert.equal(saved.subarray(0, 11).toString(), "SISAT-SLIP-1");
+  assert.ok(!saved.equals(png));
   const slipPath = "/api/slip?orderId=" + encodeURIComponent(order.id) + "&slipId=" + review.slips[0].id;
   assert.equal((await fetch(origin + slipPath)).status, 401);
   assert.equal((await fetch(origin + slipPath, { headers: { Cookie: cookies.shopadmin } })).status, 403);
   assert.equal((await fetch(origin + slipPath, { headers: { Cookie: cookies.finance } })).status, 200);
-  await act(cookies.finance, "reviewOrder", { orderId: order.id, decision: "approve", comment: "" });
+  const approvedResult = await act(cookies.finance, "reviewOrder", { orderId: order.id, decision: "approve", comment: "" });
+  assert.deepEqual(approvedResult.order.ticketCodes, []);
+  assert.equal(approvedResult.order.dietaryNotes, "");
+  assert.deepEqual((await snapshot(cookies.gate)).orders.find((o) => o.id === order.id).ticketCodes, []);
+  assert.equal((await snapshot(cookies.shopadmin)).orders.find((o) => o.id === order.id).slips, undefined);
   const paid = (await snapshot(cookies.customer)).orders.find((o) => o.id === order.id);
   assert.equal(paid.ticketCodes.length, 8);
   await act(cookies.gate, "scanTicket", { code: paid.ticketCodes[0] });
@@ -110,6 +130,31 @@ try {
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()));
   assert.ok(workbook.worksheets[0].rowCount > 1);
   assert.ok(workbook.worksheets[0].autoFilter);
+  const strangerResult = await request("", "register", { username: "other_customer", displayName: "Other Customer", password });
+  assert.equal(strangerResult.status, 200);
+  const strangerCookie = strangerResult.headers.get("set-cookie").split(";")[0];
+  assert.equal((await fetch(origin + slipPath, { headers: { Cookie: strangerCookie } })).status, 403);
+  assert.equal((await snapshot(strangerCookie)).orders.length, 0);
+  assert.equal((await request(strangerCookie, "cancelOrder", { orderId: order.id })).status, 403);
+  assert.equal((await fetch(origin + "/api/export", { headers: { Cookie: strangerCookie } })).status, 403);
+  assert.equal((await fetch(origin + "/api/staff/customers", { headers: { Cookie: strangerCookie } })).status, 403);
+  const csrf = await fetch(origin + "/api/demo", { method: "POST", headers: { Cookie: cookies.superadmin, Origin: "https://attacker.invalid", "Content-Type": "application/json" }, body: JSON.stringify({ action: "setRoles" }) });
+  assert.equal(csrf.status, 403);
+  for (let i = 0; i < 12; i++) assert.equal((await request("", "login", { username: "rate_probe", password: "incorrect" })).status, 401);
+  const throttled = await request("", "login", { username: "rate_probe", password: "incorrect" });
+  assert.equal(throttled.status, 429); assert.ok(throttled.headers.get("retry-after"));
+
+  // The update migrates legacy uploads without touching orders or requiring a fresh database.
+  const legacy = review.slips[1].filename;
+  await writeFile(path.join(storage, "slips", legacy), png);
+  const migrated = spawnSync(process.execPath, ["--import", "tsx", "scripts/security-migrate.ts"], { env, encoding: "utf8" });
+  assert.equal(migrated.status, 0, migrated.stderr);
+  assert.ok(!(await readFile(path.join(storage, "slips", legacy))).equals(png));
+  assert.ok(Buffer.from(await (await fetch(origin + slipPath, { headers: { Cookie: cookies.finance } })).arrayBuffer()).equals(png));
+  if (process.env.RUN_BROWSER_TESTS === "1") {
+    const { verifyResponsive } = await import("./verify-responsive.mjs");
+    await verifyResponsive(origin, cookies.customer);
+  }
   console.log("HTTP smoke passed: six roles, 30 competing bookings, slip limits/privacy, ticket reuse, product upload, refund and XLSX.");
 } finally {
   if (server && server.exitCode === null) {

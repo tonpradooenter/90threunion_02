@@ -1,7 +1,7 @@
 import { randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { DemoData, DemoOrder, DemoSnapshot, DemoUser, PublicUser, Role } from "./demo-types";
+import type { DemoData, DemoOrder, DemoSnapshot, DemoUser, PublicUser, Role, Product } from "./demo-types";
 import { mutateDatabaseData, readDatabaseData, touchDatabaseSession } from "./database-store";
 import { databaseProvider } from "./database-config";
 import { storagePath } from "./storage";
@@ -11,11 +11,14 @@ const dataDir = storagePath();
 const dataFile = path.join(dataDir, "demo.json");
 let pending: Promise<unknown> = Promise.resolve();
 
-export const publicUser = (user: DemoUser): PublicUser => {
-  const { passwordHash: _passwordHash, ...safe } = user;
-  void _passwordHash;
-  return safe;
-};
+/** Explicit allowlist: new secret fields must never appear automatically in API responses. */
+export const publicUser = (user: DemoUser): PublicUser => ({
+  id: user.id, username: user.username, displayName: user.displayName,
+  role: user.role, roles: [...(user.roles?.length ? user.roles : [user.role])],
+  ...(user.phone ? { phone: user.phone } : {}),
+  ...(user.contactSource ? { contactSource: user.contactSource } : {}),
+  active: user.active, createdAt: user.createdAt,
+});
 
 export function hasRole(user: Pick<DemoUser, "role" | "roles">, role: Role): boolean {
   return (user.roles?.length ? user.roles : [user.role]).includes(role);
@@ -219,6 +222,51 @@ export function activeOrder(order: DemoOrder): boolean {
   return order.status === "awaiting_slip" && Date.parse(order.holdUntil) > Date.now();
 }
 
+/** The same projection is used for GET snapshots and POST action results. */
+export function visibleOrder(data: DemoData, order: DemoOrder, me: DemoUser): DemoOrder | null {
+  const owner = order.userId === me.id;
+  const superadmin = hasRole(me, "superadmin");
+  if (!owner && !superadmin && hasRole(me, "customer")) return null;
+  const ticketAccess = owner || superadmin;
+  const slipAccess = owner || superadmin || hasRole(me, "finance");
+  const foodAccess = owner || superadmin || hasRole(me, "tables");
+  const item = (value: NonNullable<DemoOrder["items"]>[number]) => ({
+    id: value.id, productId: value.productId, name: value.name, quantity: value.quantity,
+    unitPrice: value.unitPrice, optionId: value.optionId,
+    size: data.products.find((p) => p.id === value.productId)?.options?.find((o) => o.id === value.optionId)?.label ?? value.size,
+  });
+  return {
+    id: order.id, userId: order.userId, type: order.type, status: order.status,
+    tableIds: [...order.tableIds], items: order.items.map(item),
+    cancelledItems: order.cancelledItems?.map((value) => ({ ...item(value), cancelledAt: value.cancelledAt, cancelReason: value.cancelReason })),
+    cancelledTables: order.cancelledTables?.map(({ id, cancelledAt, cancelReason }) => ({ id, cancelledAt, cancelReason })),
+    refunds: order.refunds?.map(({ id, amount, reason, status, requestedAt, completedAt, completedBy, reference, itemIds, tableIds }) => ({
+      id, amount, reason, status, requestedAt, completedAt, completedBy, reference, itemIds, tableIds,
+    })),
+    meal: order.meal, dietaryNotes: foodAccess ? order.dietaryNotes : "",
+    amount: order.amount, paidAmount: order.paidAmount, tablePrices: order.tablePrices,
+    createdAt: order.createdAt, holdUntil: order.holdUntil,
+    slips: slipAccess ? order.slips?.map(({ id, filename, name, uploadedAt }) => ({ id, filename, name, uploadedAt })) : undefined,
+    slipFile: slipAccess ? order.slipFile : undefined, slipName: slipAccess ? order.slipName : undefined,
+    financeComment: order.financeComment, reviewedBy: order.reviewedBy, reviewedAt: order.reviewedAt,
+    ticketCodes: ticketAccess ? [...order.ticketCodes] : [],
+    checkedInCodes: ticketAccess ? [...order.checkedInCodes] : [],
+    cancelledTicketCodes: ticketAccess ? order.cancelledTicketCodes : undefined,
+    pickupCode: ticketAccess ? order.pickupCode : undefined, pickedUpAt: order.pickedUpAt,
+    assistedBy: order.assistedBy, channel: order.channel,
+    history: order.history?.map(({ at, actor, summary }) => ({ at, actor, summary })),
+  };
+}
+
+function publicProduct(product: Product): Product {
+  return {
+    id: product.id, name: product.name, description: product.description, price: product.price,
+    stock: product.stock, image: product.image, category: product.category, sizes: [...product.sizes],
+    options: product.options?.map(({ id, label }) => ({ id, label })),
+    active: product.active, archived: product.archived,
+  };
+}
+
 export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
   const tableStatuses: DemoSnapshot["tableStatuses"] = {};
   const productAvailable: DemoSnapshot["productAvailable"] = {};
@@ -229,30 +277,17 @@ export function snapshot(data: DemoData, me: DemoUser | null): DemoSnapshot {
     for (const tableId of order.tableIds) tableStatuses[tableId] = order.status === "approved" ? "sold" : "reserved";
     for (const item of order.items) productAvailable[item.productId] = Math.max(0, (productAvailable[item.productId] ?? 0) - item.quantity);
   }
-  const visibleOrders = !me ? [] : data.orders
-    .filter((order) => !hasRole(me, "customer") || order.userId === me.id)
-    .map((order) => {
-      const currentLabel = (item: { productId: string; optionId?: string; size?: string }) => data.products.find((product) => product.id === item.productId)?.options?.find((option) => option.id === item.optionId)?.label ?? item.size;
-      const displayOrder = {
-        ...order,
-        items: order.items.map((item) => ({ ...item, size: currentLabel(item) })),
-        cancelledItems: order.cancelledItems?.map((item) => ({ ...item, size: currentLabel(item) })),
-      };
-      if (hasRole(me, "superadmin") || hasRole(me, "customer")) return displayOrder;
-      return {
-        ...displayOrder,
-        slipFile: hasRole(me, "finance") ? order.slipFile : undefined,
-        slips: hasRole(me, "finance") ? order.slips : undefined,
-        slipName: hasRole(me, "finance") ? order.slipName : undefined,
-        dietaryNotes: hasRole(me, "tables") ? order.dietaryNotes : "",
-        ticketCodes: [],
-        checkedInCodes: [],
-        pickupCode: undefined,
-      };
-    });
+  const visibleOrders = me ? data.orders.flatMap((order) => {
+    const view = visibleOrder(data, order, me);
+    return view ? [view] : [];
+  }) : [];
   return {
     me: me ? publicUser(me) : null,
-    products: data.products,
+    products: data.products.filter((product) => {
+      if (me && !hasRole(me, "customer")) return true;
+      if (product.active && !product.archived) return true;
+      return visibleOrders.some((order) => [...order.items, ...(order.cancelledItems ?? [])].some((item) => item.productId === product.id));
+    }).map(publicProduct),
     zones: data.zones,
     tableStatuses,
     productAvailable,

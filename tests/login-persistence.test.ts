@@ -6,10 +6,10 @@ import path from "node:path";
 
 describe("การเข้าสู่ระบบบนเครื่อง Windows", () => {
   it("สร้างบัญชีทดลอง ตรวจรหัสผ่าน และบันทึก session ลงไฟล์ได้", async () => {
-    const originalCwd = process.cwd();
+    const originalStorage = process.env.STORAGE_DIR;
     const temp = await mkdtemp(path.join(os.tmpdir(), "sisat-login-test-"));
     try {
-      process.chdir(temp);
+      process.env.STORAGE_DIR = path.join(temp, "data");
       const store = await import("../lib/demo-store");
       const initial = await store.readData();
       const customer = initial.users.find((user) => user.username === "customer");
@@ -23,7 +23,7 @@ describe("การเข้าสู่ระบบบนเครื่อง 
       const after = await store.readData();
       assert.equal(store.currentUser(after, "test-session")?.username, "customer");
     } finally {
-      process.chdir(originalCwd);
+      if (originalStorage === undefined) delete process.env.STORAGE_DIR; else process.env.STORAGE_DIR = originalStorage;
       if (!temp.startsWith(os.tmpdir() + path.sep)) throw new Error("Unsafe temp path");
       await rm(temp, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }

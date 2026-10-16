@@ -1,11 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { activeOrder, currentUser, hasRole, hashPassword, logAction, mutateData, publicUser, readData, snapshot, verifyPassword } from "@/lib/demo-store";
+import { activeOrder, currentUser, hasRole, hashPassword, logAction, mutateData, publicUser, readData, snapshot, verifyPassword, visibleOrder } from "@/lib/demo-store";
 import { sameOrigin } from "@/lib/request-origin";
 import { cancelEntireOrder, completeRefund, orderIsUsed, recordRemovedSelections, resolveCancellation } from "@/lib/order-workflow";
 import { defaultBranding, settingsOf, validSiteImage } from "@/lib/site-settings";
 import type { DemoData, DemoOrder, DemoUser, OrderItem, OrderRefund, Role } from "@/lib/demo-types";
+
+import { loginAllowed } from "@/lib/login-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,12 +110,23 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     if (!sameOrigin(request)) throw new AppError("คำขอมาจากเว็บไซต์อื่น", 403);
     if (Number(request.headers.get("content-length") ?? 0) > 100_000) throw new AppError("ข้อมูลมีขนาดใหญ่เกินไป", 413);
-    const body = await request.json() as Record<string, unknown>;
+    const raw = await request.text();
+    if (Buffer.byteLength(raw, "utf8") > 100_000) throw new AppError("ข้อมูลมีขนาดใหญ่เกินไป", 413);
+    let body: Record<string, unknown>;
+    try {
+      const value: unknown = JSON.parse(raw);
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+      body = value as Record<string, unknown>;
+    } catch { throw new AppError("ข้อมูลคำขอไม่ถูกต้อง", 400); }
     const action = str(body.action, 40);
     const token = (await cookies()).get(COOKIE)?.value;
 
     if (action === "login") {
       const username = str(body.username, 80).toLowerCase();
+      const limit = loginAllowed(username);
+      if (!limit.allowed) return NextResponse.json({ error: "ลองเข้าสู่ระบบถี่เกินไป กรุณารอสักครู่" }, {
+        status: 429, headers: { "Retry-After": String(limit.retryAfter), "Cache-Control": "no-store" },
+      });
       const password = str(body.password, 200);
       const sessionToken = randomBytes(32).toString("hex");
       const user = await mutateData((data) => {
@@ -530,6 +543,11 @@ export async function POST(request: Request): Promise<NextResponse> {
 
       throw new AppError("ไม่รู้จักคำสั่ง", 404);
     });
-    return NextResponse.json({ ok: true, ...result });
+    const latest = await readData();
+    const viewer = currentUser(latest, token);
+    const safe = "order" in result && result.order
+      ? { ...result, order: viewer ? visibleOrder(latest, result.order, viewer) : null }
+      : result;
+    return NextResponse.json({ ok: true, ...safe }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return responseError(error); }
 }

@@ -7,6 +7,7 @@ import sharp from "sharp";
 import { currentUser, hasRole, logAction, mutateData, readData } from "@/lib/demo-store";
 import { sameOrigin } from "@/lib/request-origin";
 import { storagePath } from "@/lib/storage";
+import { encryptSlip, decryptSlip } from "@/lib/private-slips";
 import type { SlipImage } from "@/lib/demo-types";
 
 export const runtime = "nodejs";
@@ -54,7 +55,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       const meta = await sharp(bytes, { limitInputPixels: 50_000_000 }).metadata();
       if (!meta.width || !meta.height || meta.width > 9000 || meta.height > 9000) return NextResponse.json({ error: "ไฟล์ภาพสลิปไม่ถูกต้อง" }, { status: 400 });
       const filename = `${randomUUID()}.${type.extension}`;
-      await fs.writeFile(path.join(/*turbopackIgnore: true*/ slipDir, filename), bytes, { flag: "wx" });
+      await fs.writeFile(path.join(/*turbopackIgnore: true*/ slipDir, filename), await encryptSlip(bytes), { flag: "wx", mode: 0o600 });
       written.push(filename);
       incoming.push({ id: randomUUID(), filename, name: file.name.slice(0, 150), uploadedAt: new Date().toISOString() });
     }
@@ -99,7 +100,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const slip = slipId ? images.find((entry) => entry.id === slipId) : images[0];
     if (!slip) return NextResponse.json({ error: "ไม่พบสลิป" }, { status: 404 });
     const filename = path.basename(slip.filename);
-    const file = await fs.readFile(path.join(/*turbopackIgnore: true*/ slipDir, filename));
+    const file = await decryptSlip(await fs.readFile(path.join(/*turbopackIgnore: true*/ slipDir, filename)));
     const mime = filename.endsWith(".png") ? "image/png" : filename.endsWith(".webp") ? "image/webp" : "image/jpeg";
     return new NextResponse(new Uint8Array(file), { headers: {
       "Content-Type": mime, "Content-Disposition": `inline; filename="slip.${filename.split(".").at(-1)}"`,
