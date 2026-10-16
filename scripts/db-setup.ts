@@ -1,21 +1,24 @@
-﻿import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { closePostgres, ensurePostgresSchema, importPostgresData, readPostgresData } from "../lib/postgres-store";
-import { migrateData } from "../lib/demo-store";
+import { readFile } from "node:fs/promises";
+import { closeDatabase, ensureDatabaseSchema, importDatabaseData, readDatabaseData } from "../lib/database-store";
+import { databaseProvider } from "../lib/database-config";
+import { createDemoData, migrateData } from "../lib/demo-store";
 import type { DemoData } from "../lib/demo-types";
 
 async function main() {
-  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is missing from .env.local");
-  await ensurePostgresSchema();
-  const existing = await readPostgresData();
+  if (databaseProvider() === "file") throw new Error("Set DATABASE_URL before running db:setup");
+  await ensureDatabaseSchema();
+  const existing = await readDatabaseData();
   if (existing.users.length || existing.orders.length) {
-    process.stdout.write(`Database already contains ${existing.users.length} users and ${existing.orders.length} orders; import skipped.\n`);
+    process.stdout.write("Database already contains app data; seed skipped. Existing data was preserved.\n");
     return;
   }
-  const file = path.join(process.cwd(), "data", "demo.json");
-  const source = migrateData(JSON.parse(await readFile(file, "utf8")) as DemoData);
-  await importPostgresData(source);
-  process.stdout.write(`Imported ${source.users.length} users, ${source.products.length} products and ${source.orders.length} orders.\n`);
+  // Import a file only when explicitly requested; never silently upload local users/slips.
+  const sourceFile = process.argv.find((arg) => arg.startsWith("--import-json="))?.slice(14);
+  const source = migrateData(sourceFile
+    ? JSON.parse(await readFile(sourceFile, "utf8")) as DemoData
+    : createDemoData());
+  source.sessions = [];
+  await importDatabaseData(source);
+  process.stdout.write(`Database setup complete (${databaseProvider()}): ${source.users.length} demo accounts, ${source.orders.length} sample orders.\n`);
 }
-
-main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(closePostgres);
+main().catch((error) => { console.error(error instanceof Error ? error.message : "Setup failed"); process.exitCode = 1; }).finally(closeDatabase);

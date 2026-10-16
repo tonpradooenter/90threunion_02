@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
+import { storagePath } from "@/lib/storage";
 
 export const runtime = "nodejs";
-const imageDir = path.join(process.cwd(), "data", "site-images");
+const imageDir = storagePath("site-images");
 
 export async function GET(_request: Request, context: { params: Promise<{ filename: string }> }): Promise<NextResponse> {
   const { filename } = await context.params;

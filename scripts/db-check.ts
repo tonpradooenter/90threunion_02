@@ -1,7 +1,8 @@
-﻿import { closePostgres, readPostgresData } from "../lib/postgres-store";
-
+import { closeDatabase, readDatabaseData } from "../lib/database-store";
+import { databaseProvider } from "../lib/database-config";
 async function main() {
-  const data = await readPostgresData();
-  process.stdout.write(`PostgreSQL ready: ${data.users.length} users, ${data.orders.length} orders, ${data.products.length} products.\n`);
+  if (databaseProvider() === "file") throw new Error("DATABASE_URL is required");
+  const data = await readDatabaseData();
+  process.stdout.write(`Database ready (${databaseProvider()}): ${data.users.length} users, ${data.orders.length} orders, ${data.products.length} products.\n`);
 }
-main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(closePostgres);
+main().catch((error) => { console.error(error instanceof Error ? error.message : "Check failed"); process.exitCode = 1; }).finally(closeDatabase);

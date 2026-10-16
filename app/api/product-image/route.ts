@@ -4,6 +4,8 @@ import path from "node:path";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { currentUser, hasRole, readData } from "@/lib/demo-store";
+import sharp from "sharp";
+import { storagePath } from "@/lib/storage";
 import { sameOrigin } from "@/lib/request-origin";
 
 export const runtime = "nodejs";
@@ -25,10 +27,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     else if (bytes.length >= 12 && Buffer.from(bytes.subarray(0, 4)).toString() === "RIFF" && Buffer.from(bytes.subarray(8, 12)).toString() === "WEBP") extension = "webp";
     if (!extension) return NextResponse.json({ error: "รองรับเฉพาะ PNG, JPG หรือ WebP" }, { status: 400 });
     const filename = `${randomUUID()}.${extension}`;
-    const directory = path.join(process.cwd(), "public", "uploads");
+    const meta = await sharp(bytes, { limitInputPixels: 50_000_000 }).metadata();
+    if (!meta.width || !meta.height || !["png", "jpeg", "webp"].includes(meta.format ?? "")) return NextResponse.json({ error: "ไฟล์ภาพไม่ถูกต้อง" }, { status: 400 });
+    const directory = storagePath("product-images");
     await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, filename), bytes, { flag: "wx" });
-    return NextResponse.json({ ok: true, path: `/uploads/${filename}` });
+    await fs.writeFile(path.join(/*turbopackIgnore: true*/ directory, filename), bytes, { flag: "wx" });
+    return NextResponse.json({ ok: true, path: `/api/product-image/${filename}` });
   } catch (error) {
     console.error("Product image upload error", error);
     return NextResponse.json({ error: "อัปโหลดรูปไม่สำเร็จ" }, { status: 500 });

@@ -4,11 +4,12 @@ import path from "node:path";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import sharp from "sharp";
+import { storagePath } from "@/lib/storage";
 import { currentUser, hasRole, readData } from "@/lib/demo-store";
 import { sameOrigin } from "@/lib/request-origin";
 
 export const runtime = "nodejs";
-const imageDir = path.join(process.cwd(), "data", "site-images");
+const imageDir = storagePath("site-images");
 const guidance = {
   eventLogo: { minWidth: 256, minHeight: 256, transparent: true },
   ovcLogo: { minWidth: 256, minHeight: 256, transparent: true },
@@ -40,7 +41,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const ext = meta.format === "jpeg" ? "jpg" : meta.format;
     const filename = `${randomUUID()}.${ext}`;
     await fs.mkdir(imageDir, { recursive: true });
-    await fs.writeFile(path.join(imageDir, filename), bytes, { flag: "wx" });
+    await fs.writeFile(path.join(/*turbopackIgnore: true*/ imageDir, filename), bytes, { flag: "wx" });
     return NextResponse.json({ ok: true, path: `/api/site-image/${filename}`, width: meta.width, height: meta.height });
   } catch (error) {
     console.error("Site image upload error", error);

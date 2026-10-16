@@ -2,10 +2,12 @@ import { randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { DemoData, DemoOrder, DemoSnapshot, DemoUser, PublicUser, Role } from "./demo-types";
-import { mutatePostgresData, readPostgresData, touchPostgresSession } from "./postgres-store";
+import { mutateDatabaseData, readDatabaseData, touchDatabaseSession } from "./database-store";
+import { databaseProvider } from "./database-config";
+import { storagePath } from "./storage";
 import { defaultSettings, settingsOf } from "./site-settings";
 
-const dataDir = path.join(process.cwd(), "data");
+const dataDir = storagePath();
 const dataFile = path.join(dataDir, "demo.json");
 let pending: Promise<unknown> = Promise.resolve();
 
@@ -35,9 +37,12 @@ export function verifyPassword(password: string, stored: string): boolean {
   return timingSafeEqual(actual, Buffer.from(expected, "hex"));
 }
 
-function seedData(): DemoData {
+export function createDemoData(password = process.env.DEMO_PASSWORD || "Demo@1234"): DemoData {
+  if (process.env.NODE_ENV === "production" && (password === "Demo@1234" || password.startsWith("CHANGE_") || password.length < 12)) {
+    throw new Error("Set DEMO_PASSWORD to a unique password of at least 12 characters before seeding production");
+  }
   const now = new Date().toISOString();
-  const passwordHash = hashPassword("Demo@1234");
+  const passwordHash = hashPassword(password);
   const user = (username: string, displayName: string, role: Role, roles: Role[] = [role]): DemoUser => ({
     id: randomUUID(), username, displayName, role, roles, passwordHash, active: true, createdAt: now,
   });
@@ -173,17 +178,17 @@ export function migrateData(data: DemoData): DemoData {
 async function ensureData(): Promise<void> {
   await fs.mkdir(dataDir, { recursive: true });
   try { await fs.access(dataFile); }
-  catch { await fs.writeFile(dataFile, JSON.stringify(seedData(), null, 2), { flag: "wx" }).catch(async (error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; }); }
+  catch { await fs.writeFile(dataFile, JSON.stringify(createDemoData(), null, 2), { flag: "wx" }).catch(async (error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; }); }
 }
 
 export async function readData(): Promise<DemoData> {
-  if (process.env.DATABASE_URL) return migrateData(await readPostgresData());
+  if (databaseProvider() !== "file") return migrateData(await readDatabaseData());
   await ensureData();
   return migrateData(JSON.parse(await fs.readFile(dataFile, "utf8")) as DemoData);
 }
 
 export async function mutateData<T>(fn: (data: DemoData) => Promise<T> | T): Promise<T> {
-  if (process.env.DATABASE_URL) return mutatePostgresData(fn);
+  if (databaseProvider() !== "file") return mutateDatabaseData((data) => fn(migrateData(data)));
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
   const previous = pending;
@@ -271,7 +276,7 @@ export function logAction(data: DemoData, actorId: string, action: string, detai
 
 export async function touchSession(token: string | undefined): Promise<boolean> {
   if (!token) return false;
-  if (process.env.DATABASE_URL) return touchPostgresSession(token);
+  if (databaseProvider() !== "file") return touchDatabaseSession(token);
   return mutateData((data) => {
     const user = currentUser(data, token);
     if (!user) return false;

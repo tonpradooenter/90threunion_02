@@ -14,7 +14,7 @@ const COOKIE = "sisat_demo_session";
 const roles: Role[] = ["superadmin", "tables", "merch", "finance", "gate", "customer"];
 
 function cookieSecure(request: Request): boolean {
-  const hostname = new URL(request.url).hostname;
+  const hostname = new URL(process.env.APP_ORIGIN || request.url).hostname;
   return process.env.NODE_ENV === "production" && !["localhost", "127.0.0.1", "[::1]"].includes(hostname);
 }
 
@@ -407,7 +407,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         const category = str(body.category, 60);
         if (name.length < 2) throw new AppError("กรุณาใส่ชื่อสินค้า");
         if (!data.categories?.includes(category)) throw new AppError("กรุณาเลือกประเภทสินค้าที่มีอยู่");
-        if (image && !/^\/(assets|uploads)\/[a-zA-Z0-9._/-]+$/.test(image)) throw new AppError("ตำแหน่งรูปภาพไม่ถูกต้อง");
+        if (image && !/^\/(assets|uploads|api\/product-image)\/[a-zA-Z0-9._/-]+$/.test(image)) throw new AppError("ตำแหน่งรูปภาพไม่ถูกต้อง");
         const used = existing ? productUsed(data, existing.id) : 0;
         if (stock < used) throw new AppError(`สต็อกต่ำกว่าจำนวนที่จอง/ขายแล้ว (${used})`);
         const requested = Array.isArray(body.options) ? body.options as { id?: unknown; label?: unknown }[] : [];

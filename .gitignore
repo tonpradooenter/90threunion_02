@@ -5,3 +5,9 @@ public/uploads/
 tmp/
 *.tsbuildinfo
 .env*
+
+!.env.example
+releases/
+diagnostics-*/
+playwright-report/
+next-env.d.ts
