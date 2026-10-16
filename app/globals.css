@@ -271,3 +271,9 @@ button, input, select, textarea { touch-action: manipulation; }
   .hero-lead { margin-bottom: 18px; font-size: 14px; }
   .hero-meta { margin-top: 20px; }
 }
+
+@media (max-width: 600px) {
+  .nav-actions { flex-shrink: 0; }
+  .nav-actions > .button { width: auto; height: 40px; padding: 10px 12px; white-space: nowrap; flex-shrink: 0; }
+  .brand-button { min-width: 0; }
+}

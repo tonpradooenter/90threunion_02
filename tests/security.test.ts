@@ -12,7 +12,7 @@ it("encrypts slips with independent nonces and detects tampering", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sisat-crypto-test-"));
   try {
     process.env.STORAGE_DIR = root;
-    const image = Buffer.from("private-financial-slip-image-data");
+    const image = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.from("private-financial-slip-image-data")]);
     const first = await encryptSlip(image);
     const second = await encryptSlip(image);
     assert.ok(encryptedSlip(first));

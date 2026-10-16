@@ -38,7 +38,14 @@ export async function encryptSlip(bytes: Uint8Array): Promise<Buffer> {
 }
 export async function decryptSlip(bytes: Uint8Array): Promise<Buffer> {
   const saved = Buffer.from(bytes);
-  if (!encryptedSlip(saved)) return saved; // Read legacy uploads until the explicit migration completes.
+  if (!encryptedSlip(saved)) {
+    // Only known legacy image signatures are accepted; a damaged encryption header must not bypass validation.
+    const png = saved.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+    const jpg = saved[0] === 255 && saved[1] === 216 && saved[2] === 255;
+    const webp = saved.subarray(0,4).toString() === "RIFF" && saved.subarray(8,12).toString() === "WEBP";
+    if (!png && !jpg && !webp) throw new Error("Invalid legacy slip image or damaged encryption header");
+    return saved;
+  }
   if (saved.length < magic.length + 28) throw new Error("Invalid encrypted slip");
   const offset = magic.length;
   const decipher = createDecipheriv("aes-256-gcm", await key(), saved.subarray(offset, offset + 12));
