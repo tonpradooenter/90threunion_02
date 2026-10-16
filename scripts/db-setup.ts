@@ -5,7 +5,7 @@ import { createDemoData, migrateData } from "../lib/demo-store";
 import type { DemoData } from "../lib/demo-types";
 
 async function main() {
-  if (databaseProvider() === "file") throw new Error("Set DATABASE_URL before running db:setup");
+  if (databaseProvider() === "file") throw new Error("Database configuration is required: set DB_DRIVER=mariadb, DB_NAME, DB_USER and DB_PASSWORD, or DATABASE_URL. For Plesk commands, configure .env.local in Application Root.");
   await ensureDatabaseSchema();
   const existing = await readDatabaseData();
   if (existing.users.length || existing.orders.length) {

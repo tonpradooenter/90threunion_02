@@ -1,6 +1,6 @@
 # ติดตั้ง SISAT 90 v1 บน Hostatom / Plesk
 
-คู่มือนี้ใช้สำหรับ **เดโมไม่เกิน 30 คนพร้อมกัน** บน **90reunion.tonpradoo.com** โดยแยกจาก WordPress ที่ tonpradoo.com
+คู่มือนี้ใช้สำหรับ **เดโมไม่เกิน 30 คนพร้อมกัน** บน **90thsisat.tonpradoo.com** โดยแยกจาก WordPress ที่ tonpradoo.com
 
 ## 1. ดาวน์โหลดรุ่นให้ถูกต้อง
 
@@ -14,16 +14,16 @@
 
 Plesk → Websites & Domains → **Add Subdomain**
 
-- Subdomain: `90reunion`
+- Subdomain: `90thsisat`
 - Parent domain: `tonpradoo.com`
-- Document Root: `90reunion-app/public` (ชื่อ path ที่ Plesk แสดงอาจมี / นำหน้า)
-- สร้างโฟลเดอร์ `90reunion-app` สำหรับแอป และ `90reunion-storage` สำหรับไฟล์ถาวรที่ระดับเดียวกัน
+- Document Root: `90thsisat.tonpradoo.com/public` (ชื่อ path ที่ Plesk แสดงอาจมี / นำหน้า)
+- สร้างโฟลเดอร์ `90thsisat.tonpradoo.com` สำหรับแอป และ `90thsisat-storage` สำหรับไฟล์ถาวรที่ระดับเดียวกัน
 
 โครงสร้างภายในพื้นที่บัญชี:
 
 ```text
 httpdocs/                  WordPress เดิม
-90reunion-app/
+90thsisat.tonpradoo.com/
   app.cjs
   package.json
   package-lock.json
@@ -31,16 +31,16 @@ httpdocs/                  WordPress เดิม
   lib/
   public/                  Document Root ของ subdomain
   scripts/
-90reunion-storage/          สลิปและภาพใหม่ เก็บข้ามการอัปเดตโค้ด
+90thsisat-storage/          สลิปและภาพใหม่ เก็บข้ามการอัปเดตโค้ด
 ```
 
 อัปโหลด ZIP ผ่าน Files/File Manager ของโฟลเดอร์ใหม่แล้ว Extract ให้ `package.json` อยู่ตรง Application Root อย่าซ้อนอีกชั้นตามชื่อ ZIP และอย่าอัปโหลด `.env.local`, `data/`, `tmp/`, `.git/`, `node_modules/` หรือ `.next/` จากคอม
 
-หาก DNS ไม่ถูกสร้างอัตโนมัติ ให้เพิ่ม A record ของ `90reunion` ไปยัง IP hosting ที่ Plesk แสดง (ข้อมูลที่ให้มาคือ 203.146.252.146) โดยไม่เปลี่ยน nameserver หรือ DNS ของเว็บหลัก
+หาก DNS ไม่ถูกสร้างอัตโนมัติ ให้เพิ่ม A record ของ `90thsisat` ไปยัง IP hosting ที่ Plesk แสดง (ข้อมูลที่ให้มาคือ 203.146.252.146) โดยไม่เปลี่ยน nameserver หรือ DNS ของเว็บหลัก
 
 ## 3. เปิด HTTPS ของ subdomain
 
-เข้า SSL/TLS Certificates ของ **90reunion.tonpradoo.com** ใช้ certificate ที่ครอบคลุมชื่อนี้ หากมี Wildcard SSL อยู่แล้วให้เลือกใช้ได้ หรือออก Let's Encrypt สำหรับ subdomain นี้ เปิด redirect HTTP → HTTPS ของ subdomain
+เข้า SSL/TLS Certificates ของ **90thsisat.tonpradoo.com** ใช้ certificate ที่ครอบคลุมชื่อนี้ หากมี Wildcard SSL อยู่แล้วให้เลือกใช้ได้ หรือออก Let's Encrypt สำหรับ subdomain นี้ เปิด redirect HTTP → HTTPS ของ subdomain
 
 ## 4. สร้างฐานข้อมูลใหม่
 
@@ -50,7 +50,7 @@ Databases → Add Database:
 |---|---|
 | Database name | reunion_v1 (Plesk อาจเติมเป็น tonpra_reunion_v1) |
 | Database server | MariaDB localhost:3306 |
-| Related site | 90reunion.tonpradoo.com |
+| Related site | 90thsisat.tonpradoo.com |
 | Create a database user | เปิด |
 | Database user | reunion_app (จดชื่อเต็มรวม prefix) |
 | Password | Generate และเก็บไว้ในที่ปลอดภัย |
@@ -61,15 +61,15 @@ Databases → Add Database:
 
 ## 5. ตั้งค่า Node.js ของ subdomain
 
-เปิด Node.js ภายใต้ **90reunion.tonpradoo.com** ตรวจชื่อด้านบนทุกครั้ง:
+เปิด Node.js ภายใต้ **90thsisat.tonpradoo.com** ตรวจชื่อด้านบนทุกครั้ง:
 
 | ช่อง | ค่า |
 |---|---|
 | Node.js Version | **24.x** ที่โฮสต์มี |
 | Package Manager | npm |
 | Application Mode | production |
-| Application Root | /90reunion-app |
-| Document Root | /90reunion-app/public |
+| Application Root | /90thsisat.tonpradoo.com |
+| Document Root | /90thsisat.tonpradoo.com/public |
 | Application Startup File | **app.cjs** |
 
 app.cjs รองรับ Passenger ของ Plesk ไม่ต้องติดตั้ง PM2 หรือเปิดพอร์ต 3000 ออกอินเทอร์เน็ต Plesk เป็นผู้ส่ง request เข้าตัวแอป
@@ -88,17 +88,48 @@ app.cjs รองรับ Passenger ของ Plesk ไม่ต้องติ
 | DB_USER | ชื่อผู้ใช้เต็ม เช่น tonpra_reunion_app |
 | DB_PASSWORD | รหัสฐานข้อมูลที่สร้าง |
 | DATABASE_CONNECTION_LIMIT | 5 |
-| APP_ORIGIN | https://90reunion.tonpradoo.com |
-| STORAGE_DIR | ../90reunion-storage |
+| APP_ORIGIN | https://90thsisat.tonpradoo.com |
+| STORAGE_DIR | ../90thsisat-storage |
 | DEMO_PASSWORD | ตั้งรหัสเฉพาะสำหรับกลุ่มทดสอบ อย่างน้อย 12 ตัว |
 
 ใช้ช่อง DB_PASSWORD แยกได้โดยตรง แม้รหัสมี @ # ! ไม่ต้องประกอบ URL หรือ encode รหัส ไม่ต้องตั้ง DATABASE_URL ซ้ำเมื่อใช้ช่อง DB_* เหล่านี้
 
 `DEMO_PASSWORD` ใช้ตอนสร้างบัญชีทดลองครั้งแรกเท่านั้น รหัสนี้ต้องต่างจากรหัส Plesk และฐานข้อมูล หน้าเว็บ production จะไม่แสดงรหัส รหัส placeholder ที่ขึ้นต้น CHANGE_ และ Demo@1234 ถูกปฏิเสธใน production
 
+
+## 6.1 ตั้งค่าฐานให้คำสั่ง npm ด้วยไฟล์ .env.local
+
+ในการติดตั้งบน Hostatom ครั้งนี้ Run Node.js commands ไม่เห็นค่า DB_* ที่บันทึกใน Custom Environment Variables จึงหยุดก่อนเชื่อมต่อฐานข้อมูล หากพบ `.env.local not found` ตามด้วย `Set DATABASE_URL before running db:setup` ให้ทำขั้นนี้ ใช้ DB_* ชุดเดิมได้ ไม่จำเป็นต้องประกอบ DATABASE_URL
+
+Files → เข้า `90thsisat.tonpradoo.com` → + → Create File → ตั้งชื่อ **.env.local** ให้อยู่ข้าง package.json และ app.cjs (อย่าสร้างใน public/)
+
+ใส่เนื้อหาด้านล่าง เปลี่ยนรหัส placeholder ทั้งสองตัวให้เป็นค่าเดียวกับที่ตั้งใน Plesk:
+
+```dotenv
+NODE_ENV=production
+DB_DRIVER=mariadb
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=tonpra_reunion_v1
+DB_USER=tonpra_reunion_app
+DB_PASSWORD="CHANGE_DB_PASSWORD"
+DATABASE_CONNECTION_LIMIT=5
+APP_ORIGIN=https://90thsisat.tonpradoo.com
+STORAGE_DIR=../90thsisat-storage
+DEMO_PASSWORD="CHANGE_DEMO_PASSWORD"
+```
+
+- DB_PASSWORD คือรหัสของผู้ใช้ฐานใหม่; DEMO_PASSWORD คือรหัสบัญชีทดลองที่ตั้งไว้ อย่างน้อย 12 ตัว
+- เก็บรหัสในเครื่องหมายคำพูด โดยเฉพาะรหัสที่มี #; ถ้ารหัสมีเครื่องหมาย double quote ให้ใช้ single quote ครอบแทนเมื่อรหัสไม่มี single quote
+- บันทึกเป็นข้อความ UTF-8 และตรวจว่าไม่มี .txt ต่อท้ายชื่อ
+- ตั้ง permissions ของ .env.local เป็น 600 (owner อ่าน/เขียน) หาก Plesk มีช่องปรับ ไม่ใช้ 777
+- ไฟล์นี้มีรหัสจริง ห้ามส่งมาในแชต ใส่ Git หรือรวมใน source ZIP; .gitignore ยกเว้นไฟล์นี้ไว้แล้ว
+- คงค่าบน Plesk กับไฟล์นี้ให้ตรงกันเมื่อเปลี่ยนการตั้งค่า โดยเฉพาะ DB_PASSWORD และ APP_ORIGIN
+- คำสั่ง db:* ใช้ Node --env-file-if-exists=.env.local อยู่แล้ว; Next.js และ app.cjs โหลดไฟล์นี้ได้ด้วย ไม่ต้องแก้โค้ดบนโฮสต์
+
 ## 7. ติดตั้ง packages → สร้างฐาน → build
 
-Node.js → **Run Node.js commands** เลือก Node 24 และ npm แล้วกรอกในช่องคำสั่งทีละบรรทัด (ช่อง npm ไม่ต้องเติม npm นำหน้า):
+กลับ Dashboard กด **Enable Node.js** เฉพาะ subdomain นี้ก่อน (หากเปิดแล้วไม่ต้องกดซ้ำ) จากนั้น Node.js → **Run Node.js commands** เลือก Node 24 และ npm แล้วกรอกในช่องคำสั่งทีละบรรทัด (ช่อง npm ไม่ต้องเติม npm นำหน้า):
 
 ```text
 ci --include=dev
@@ -113,11 +144,11 @@ db:setup สร้างตารางและบัญชีเดโม 6 �
 
 ถ้า npm แสดงให้อนุมัติ install scripts ให้ตรวจชื่อ package และให้ Hostatom ช่วยยืนยัน อย่าปิดระบบตรวจทั้งหมด ไม่ต้องคัดลอก node_modules จาก Windows มาแทน
 
-กลับ Dashboard กด **Enable Node.js** บน subdomain หรือ **Restart App** หากเปิดอยู่แล้ว
+เมื่อ build สำเร็จ กลับ Dashboard กด **Restart App** ของ subdomain นี้
 
 ## 8. ตรวจว่าใช้งานได้
 
-1. เปิด https://90reunion.tonpradoo.com/api/health ต้องได้ status: ok และ version: 1.0.0
+1. เปิด https://90thsisat.tonpradoo.com/api/health ต้องได้ status: ok และ version: 1.0.0
 2. เข้าเว็บด้วย customer และรหัส DEMO_PASSWORD ที่ตั้งไว้ ลองจองโต๊ะ/สินค้า
 3. เข้า finance ตรวจสลิปและอนุมัติ; กลับ customer ดู QR
 4. เข้า gate ตรวจ QR ซ้ำต้องไม่ผ่าน
@@ -131,8 +162,8 @@ db:setup สร้างตารางและบัญชีเดโม 6 �
 
 ## 9. อัปเดตและย้อนกลับ
 
-- ก่อนอัปเดต สำรอง MariaDB ของเดโมและโฟลเดอร์ 90reunion-storage
-- อัปโหลด source รุ่นใหม่เฉพาะ 90reunion-app; คง storage และ environment variables ไว้
+- ก่อนอัปเดต สำรอง MariaDB ของเดโมและโฟลเดอร์ 90thsisat-storage
+- อัปโหลด source รุ่นใหม่เฉพาะ 90thsisat.tonpradoo.com; คง storage และ environment variables ไว้
 - รัน ci --include=dev → run db:setup → run db:backfill → run build → Restart App
 - ทำตาม migration notes ของรุ่นใหม่ หาก schema เปลี่ยน
 - ย้อนโค้ดไป tag ที่ใช้งานได้ล่าสุดแล้วติดตั้ง/build ใหม่ หาก schema ไม่รองรับย้อนหลังต้องกู้ DB และ storage จาก backup คู่กัน

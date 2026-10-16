@@ -7,7 +7,7 @@ export function databaseProvider(): DatabaseProvider {
       if (process.env.DB_DRIVER !== "mariadb" || !process.env.DB_NAME || !process.env.DB_USER) throw new Error("Set DB_DRIVER=mariadb, DB_NAME and DB_USER");
       return "mariadb";
     }
-    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required in production");
+    if (process.env.NODE_ENV === "production") throw new Error("Database configuration is required: set DB_DRIVER=mariadb, DB_NAME, DB_USER and DB_PASSWORD, or DATABASE_URL. For Plesk commands, configure .env.local in Application Root.");
     return "file";
   }
   let protocol: string;
